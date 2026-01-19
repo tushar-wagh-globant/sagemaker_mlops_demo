@@ -1,0 +1,47 @@
+project:
+  name: wine-quality-classifier
+  version: "1.0"
+
+data:
+  source_url: https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv
+  target_column: quality
+  test_size: 0.2
+  random_state: 42
+
+model:
+  algorithm: RandomForest
+  hyperparameters:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 2
+    min_samples_leaf: 1
+    random_state: 42
+  metrics_threshold:
+    accuracy: 0.70
+
+sagemaker:
+  region: us-east-1
+  role_arn: ${SAGEMAKER_ROLE_ARN}
+  s3_bucket: ${S3_BUCKET}
+  
+  processing:
+    instance_type: ml.m5.xlarge
+    instance_count: 1
+  
+  training:
+    instance_type: ml.m5.xlarge
+    instance_count: 1
+    max_runtime_seconds: 3600
+    framework_version: "1.2-1"
+  
+  inference:
+    instance_type: ml.m5.xlarge
+    initial_instance_count: 1
+    
+  model_package_group: wine-quality-models
+
+monitoring:
+  enable_data_capture: true
+  data_capture_percentage: 100
+  enable_model_monitor: true
+  schedule_cron: cron(0 * * * ? *)
