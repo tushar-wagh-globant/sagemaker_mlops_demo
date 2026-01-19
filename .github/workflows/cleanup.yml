@@ -1,0 +1,56 @@
+name: Cleanup Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint_name:
+        description: 'Endpoint name to delete'
+        required: true
+        type: string
+      confirm:
+        description: 'Type "DELETE" to confirm'
+        required: true
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cleanup:
+    name: Delete SageMaker Resources
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DELETE'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Delete endpoint
+        run: |
+          python scripts/cleanup.py \
+            --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Create cleanup summary
+        run: |
+          echo "## Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Deleted endpoint: ${{ github.event.inputs.endpoint_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Deleted endpoint configuration" >> $GITHUB_STEP_SUMMARY

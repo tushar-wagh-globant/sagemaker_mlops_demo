@@ -25,17 +25,17 @@ sagemaker:
   s3_bucket: ${S3_BUCKET}
   
   processing:
-    instance_type: ml.m5.xlarge
+    instance_type: ml.m5.large
     instance_count: 1
   
   training:
-    instance_type: ml.m5.xlarge
+    instance_type: ml.m5.large
     instance_count: 1
     max_runtime_seconds: 3600
     framework_version: "1.2-1"
   
   inference:
-    instance_type: ml.m5.xlarge
+    instance_type: ml.t2.medium
     initial_instance_count: 1
     
   model_package_group: wine-quality-models

@@ -211,6 +211,13 @@ def get_pipeline(
 
 def main():
     import yaml
+    from pathlib import Path
+    
+    env_file = Path(__file__).parent.parent / '.env'
+    if env_file.exists():
+        from dotenv import load_dotenv
+        load_dotenv(env_file)
+        print("Loaded environment from .env file")
     
     with open('config/config.yaml', 'r') as f:
         config = yaml.safe_load(f)

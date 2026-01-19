@@ -1,0 +1,99 @@
+name: Model Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_package_arn:
+        description: 'Model Package ARN to deploy'
+        required: true
+        type: string
+      endpoint_name:
+        description: 'Endpoint name'
+        required: true
+        type: string
+      instance_type:
+        description: 'Instance type'
+        required: false
+        default: 'ml.t2.medium'
+        type: string
+      instance_count:
+        description: 'Number of instances'
+        required: false
+        default: '1'
+        type: string
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    name: Deploy Model
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      
+      - name: Install dependencies
+        run: |
+          uv sync
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy model to endpoint
+        run: |
+          export SAGEMAKER_ROLE_ARN="${{ secrets.SAGEMAKER_ROLE_ARN }}"
+          
+          python scripts/deploy.py \
+            --model-package-arn "${{ github.event.inputs.model_package_arn }}" \
+            --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
+            --instance-type "${{ github.event.inputs.instance_type }}" \
+            --instance-count "${{ github.event.inputs.instance_count }}" \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Wait for endpoint to be in service
+        run: |
+          aws sagemaker wait endpoint-in-service \
+            --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Test endpoint
+        run: |
+          python scripts/test_endpoint.py \
+            --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Create deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Endpoint Name**: ${{ github.event.inputs.endpoint_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Model Package**: ${{ github.event.inputs.model_package_arn }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance Type**: ${{ github.event.inputs.instance_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance Count**: ${{ github.event.inputs.instance_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY

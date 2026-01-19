@@ -52,22 +52,29 @@ sagemaker_mlops_demo/
 ### 1. Install Dependencies
 
 ```bash
-uv init
-uv sync
+pip install -r requirements.txt
 ```
 
-### 2. Configure AWS Credentials
+### 2. Configure Environment Variables
 
+Copy the example environment file and update with your values:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` file:
+```bash
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-access-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-access-key
+SAGEMAKER_ROLE_ARN=arn:aws:iam::YOUR_ACCOUNT:role/SageMakerExecutionRole
+S3_BUCKET=your-sagemaker-bucket
+```
+
+**Note:** For local development, you can also use AWS CLI configuration:
 ```bash
 aws configure
-```
-
-### 3. Set Up Environment Variables
-
-```bash
-export SAGEMAKER_ROLE_ARN="arn:aws:iam::YOUR_ACCOUNT:role/SageMakerExecutionRole"
-export S3_BUCKET="your-sagemaker-bucket"
-export AWS_REGION="us-east-1"
 ```
 
 ### 4. Run the Pipeline

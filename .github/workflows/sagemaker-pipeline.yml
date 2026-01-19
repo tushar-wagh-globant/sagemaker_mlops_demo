@@ -1,0 +1,210 @@
+name: SageMaker MLOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: "3.9"
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      
+      - name: Install dependencies
+        run: |
+          uv sync
+          uv pip install pytest black flake8
+      
+      - name: Run linting
+        run: |
+          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      
+      - name: Run tests
+        run: |
+          pytest tests/ -v
+
+  build-and-push:
+    name: Build and Test Pipeline Definition
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      
+      - name: Install dependencies
+        run: |
+          uv sync
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Validate pipeline definition
+        run: |
+          python -c "
+          import sys
+          sys.path.append('.')
+          from pipelines.pipeline import get_pipeline
+          
+          pipeline = get_pipeline(
+              region='${{ env.AWS_REGION }}',
+              role='${{ secrets.SAGEMAKER_ROLE_ARN }}',
+              s3_bucket='${{ secrets.S3_BUCKET }}'
+          )
+          
+          print('Pipeline definition validated successfully')
+          print(pipeline.definition())
+          "
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      
+      - name: Install dependencies
+        run: |
+          uv sync
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Create/Update SageMaker Pipeline
+        run: |
+          export SAGEMAKER_ROLE_ARN="${{ secrets.SAGEMAKER_ROLE_ARN }}"
+          export S3_BUCKET="${{ secrets.S3_BUCKET }}"
+          export AWS_REGION="${{ env.AWS_REGION }}"
+          
+          python pipelines/pipeline.py
+      
+      - name: Upload pipeline execution info
+        uses: actions/upload-artifact@v3
+        with:
+          name: pipeline-execution-staging
+          path: pipeline-execution.json
+          retention-days: 30
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      
+      - name: Install dependencies
+        run: |
+          uv sync
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Create/Update SageMaker Pipeline
+        run: |
+          export SAGEMAKER_ROLE_ARN="${{ secrets.SAGEMAKER_ROLE_ARN }}"
+          export S3_BUCKET="${{ secrets.S3_BUCKET }}"
+          export AWS_REGION="${{ env.AWS_REGION }}"
+          
+          python pipelines/pipeline.py
+      
+      - name: Deploy approved model to endpoint
+        run: |
+          export SAGEMAKER_ROLE_ARN="${{ secrets.SAGEMAKER_ROLE_ARN }}"
+          export AWS_REGION="${{ env.AWS_REGION }}"
+          
+          python scripts/deploy.py \
+            --model-package-group wine-quality-models \
+            --endpoint-name wine-quality-production \
+            --instance-type ml.t2.medium \
+            --instance-count 1 \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Test production endpoint
+        run: |
+          python scripts/test_endpoint.py \
+            --endpoint-name wine-quality-production \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Upload deployment info
+        uses: actions/upload-artifact@v3
+        with:
+          name: pipeline-execution-production
+          path: pipeline-execution.json
+          retention-days: 90
