@@ -74,12 +74,12 @@ export AWS_REGION="us-east-1"
 
 ```bash
 # Option A: Run complete SageMaker Pipeline
-python pipelines/pipeline.py
+uv run pipelines/pipeline.py
 
 # Option B: Run individual components
-python src/preprocess.py
-python src/train.py
-python src/evaluate.py
+uv run src/preprocess.py
+uv run src/train.py
+uv run src/evaluate.py
 ```
 
 ### 5. Deploy Model to Endpoint
@@ -136,7 +136,7 @@ The pipeline includes:
 ### Training Locally (for testing)
 
 ```bash
-python src/train.py --local
+uv run src/train.py --local
 ```
 
 ### Invoke Endpoint
@@ -166,7 +166,7 @@ print(f"Prediction: {result}")
 ### Clean Up Resources
 
 ```bash
-python scripts/cleanup.py
+uv run scripts/cleanup.py
 ```
 
 ## Configuration
