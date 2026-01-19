@@ -52,7 +52,8 @@ sagemaker_mlops_demo/
 ### 1. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+uv init
+uv sync
 ```
 
 ### 2. Configure AWS Credentials
