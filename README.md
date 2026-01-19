@@ -36,8 +36,7 @@ sagemaker_mlops_demo/
 ├── scripts/
 │   ├── deploy.py             # Deployment script
 │   └── setup_iam.py          # IAM role setup helper
-├── requirements.txt
-├── setup.py
+├── pyproject.toml
 └── README.md
 ```
 
