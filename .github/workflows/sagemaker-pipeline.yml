@@ -37,11 +37,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: false
+          enable-cache: true  # ✅ Enable cache for speed
 
-      # 🔹 Install runtime + dev dependencies
-      - name: Sync dev dependencies
-        run: uv sync --dev
+      - name: Sync dependencies (with dev)
+        run: uv sync --frozen --dev  # ✅ Uses uv.lock
 
       - name: Run linting
         run: uv run flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
@@ -70,11 +69,15 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: false
+          enable-cache: true  # ✅ Enable cache
 
-      # 🔹 Install runtime dependencies only
       - name: Sync runtime dependencies
-        run: uv sync
+        run: uv sync --frozen  # ✅ Uses uv.lock, includes sagemaker[pipelines]
+
+      # 🔍 Optional: Verify sagemaker.workflow is available
+      - name: Verify SageMaker pipelines import
+        run: |
+          python -c "from sagemaker.workflow.pipeline import Pipeline; print('✅ sagemaker.workflow imported successfully')"
 
       # 🔐 OIDC Authentication for AWS
       - name: Configure AWS credentials
@@ -88,8 +91,8 @@ jobs:
 
       - name: Create / Update SageMaker Pipeline
         env:
-          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          SAGEMAKER_ROLE_ARN: ${{secrets.SAGEMAKER_ROLE_ARN }}
+          S3_BUCKET: ${{secrets.S3_BUCKET }}
         run: uv run python pipelines/pipeline.py
 
       - name: Deploy approved model to endpoint
