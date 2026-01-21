@@ -38,6 +38,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true  # ✅ Enable cache for speed
+          cache-dependency-glob: ""
 
       - name: Sync dependencies (with dev)
         run: uv sync --dev 
@@ -70,6 +71,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true  # ✅ Enable cache
+          cache-dependency-glob: ""
 
       - name: Sync runtime dependencies
         run: uv sync
