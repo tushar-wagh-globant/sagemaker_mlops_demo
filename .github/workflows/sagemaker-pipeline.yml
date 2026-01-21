@@ -12,6 +12,7 @@ on:
 env:
   AWS_REGION: us-east-1
   PYTHON_VERSION: "3.9"
+  UV_PYTHON: "3.9"
 
 permissions:
   id-token: write
@@ -43,7 +44,7 @@ jobs:
       - name: Sync dependencies (with dev)
         run: uv sync --dev
         env: 
-          UV_PYTHON: /opt/hostedtoolcache/Python/${{ env.PYTHON_VERSION }}/x64/bin/python
+          UV_PYTHON: "3.9"
 
       - name: Run linting
         run: uv run flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
