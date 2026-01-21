@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - develop
   pull_request:
     branches:
       - main
@@ -21,7 +20,7 @@ permissions:
 
 jobs:
   # --------------------------------------------------
-  # CI: Tests only (runs on PRs, push, dispatch)
+  # CI: Tests & Lint (PR + Push)
   # --------------------------------------------------
   test:
     name: Run Tests
@@ -56,146 +55,44 @@ jobs:
           uv run pytest tests/ -v
 
   # --------------------------------------------------
-  # CD: Build & validate (NO PRs)
+  # CD: Build & Deploy (Push / Dispatch ONLY)
   # --------------------------------------------------
-  build-and-push:
-    name: Build and Validate Pipeline
+  build-and-deploy:
+    name: Build & Deploy SageMaker Pipeline
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name != 'pull_request'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
           enable-cache: false
 
-      - run: uv sync
+      - name: Install dependencies
+        run: uv sync
 
-      # 🔐 OIDC AUTH (push / dispatch only)
+      # 🔐 OIDC AUTH (push / workflow_dispatch only)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate pipeline definition
-        run: |
-          python - <<EOF
-          import sys
-          sys.path.append('.')
-          from pipelines.pipeline import get_pipeline
-
-          pipeline = get_pipeline(
-              region='${{ env.AWS_REGION }}',
-              role='${{ secrets.SAGEMAKER_ROLE_ARN }}',
-              s3_bucket='${{ secrets.S3_BUCKET }}'
-          )
-
-          print("Pipeline definition validated successfully")
-          print(pipeline.definition())
-          EOF
-
-  # --------------------------------------------------
-  # STAGING DEPLOY (develop branch only, NO PRs)
-  # --------------------------------------------------
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
-    environment: staging
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: false
-
-      - run: uv sync
-
-      # 🔐 OIDC AUTH
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
-          aws-region: ${{ env.AWS_REGION }}
+      # 🔎 One-time verification (safe to keep)
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
 
       - name: Create / Update SageMaker Pipeline
         env:
           SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: python pipelines/pipeline.py
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-execution-staging
-          path: pipeline-execution.json
-          retention-days: 30
-
-  # --------------------------------------------------
-  # PRODUCTION DEPLOY (main branch only, NO PRs)
-  # --------------------------------------------------
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    environment: production
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: false
-
-      - run: uv sync
-
-      # 🔐 OIDC AUTH
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Create / Update SageMaker Pipeline
-        env:
-          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
-        run: python pipelines/pipeline.py
-
-      - name: Deploy approved model to endpoint
-        run: |
-          python scripts/deploy.py \
-            --model-package-group wine-quality-models \
-            --endpoint-name wine-quality-production \
-            --instance-type ml.t2.medium \
-            --instance-count 1 \
-            --region ${{ env.AWS_REGION }}
-
-      - name: Test production endpoint
-        run: |
-          python scripts/test_endpoint.py \
-            --endpoint-name wine-quality-production \
-            --region ${{ env.AWS_REGION }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-execution-production
-          path: pipeline-execution.json
-          retention-days: 90
