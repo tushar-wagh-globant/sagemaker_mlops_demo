@@ -1,4 +1,4 @@
-"""[project]
+[project]
 name = "sagemaker-mlops-demo"
 version = "0.1.0"
 description = "SageMaker MLOps Demo with scikit-learn"
@@ -19,4 +19,3 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=7.4.0", "black>=23.9", "flake8>=6.1.0"]
-"""
