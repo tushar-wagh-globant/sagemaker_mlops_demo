@@ -40,10 +40,10 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Install dependencies
+      - name: Install project dependencies
         run: |
           uv sync
-          uv pip install pytest black flake8
+          pip install -e .
 
       - name: Run linting
         run: |
@@ -77,17 +77,18 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Install project dependencies
+        run: |
+          uv sync
+          pip install -e .
 
-      # 🔐 OIDC AUTH (push / workflow_dispatch only)
+      # 🔐 OIDC AUTH
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🔎 One-time verification (safe to keep)
       - name: Verify AWS identity
         run: aws sts get-caller-identity
 
