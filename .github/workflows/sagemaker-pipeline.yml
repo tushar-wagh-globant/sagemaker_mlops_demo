@@ -40,28 +40,16 @@ jobs:
         with:
           enable-cache: false
 
-      # 🔹 Create Python virtual environment
-      - name: Create virtual environment
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-
-      - name: Install test dependencies
-        run: |
-          source .venv/bin/activate
-          pip install -r requirements-dev.txt  # include pytest, black, flake8
+      - name: Sync dependencies
+        run: uv sync
 
       - name: Run linting
         run: |
-          source .venv/bin/activate
           uv run flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
           uv run flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Run tests
-        run: |
-          source .venv/bin/activate
-          uv run pytest tests/ -v
+        run: uv run pytest tests/ -v
 
   # --------------------------------------------------
   # CD: Build & Deploy SageMaker Pipeline
@@ -86,18 +74,8 @@ jobs:
         with:
           enable-cache: false
 
-      # 🔹 Create Python virtual environment
-      - name: Create virtual environment
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-
-      # 🔹 Install runtime dependencies only
-      - name: Install runtime dependencies
-        run: |
-          source .venv/bin/activate
-          pip install boto3 sagemaker pandas numpy scikit-learn
+      - name: Sync dependencies
+        run: uv sync
 
       # 🔐 OIDC AUTH
       - name: Configure AWS credentials
@@ -107,22 +85,17 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify AWS identity
-        run: |
-          aws sts get-caller-identity
+        run: aws sts get-caller-identity
 
       - name: Create / Update SageMaker Pipeline
         env:
           SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
-        run: |
-          source .venv/bin/activate
-          python pipelines/pipeline.py
+        run: uv run python pipelines/pipeline.py
 
       - name: Deploy approved model to endpoint
         run: |
-          source .venv/bin/activate
-          python scripts/deploy.py \cccccbglhkclbngivhcrbrngfcikjfiutfcckhthregh
-          
+          uv run python scripts/deploy.py \
             --model-package-group wine-quality-models \
             --endpoint-name wine-quality-production \
             --instance-type ml.t2.medium \
@@ -130,8 +103,6 @@ jobs:
             --region ${{ env.AWS_REGION }}
 
       - name: Test production endpoint
-        run: |
-          source .venv/bin/activate
-          python scripts/test_endpoint.py \
-            --endpoint-name wine-quality-production \
-            --region ${{ env.AWS_REGION }}
+        run: uv run python scripts/test_endpoint.py \
+          --endpoint-name wine-quality-production \
+          --region ${{ env.AWS_REGION }}
