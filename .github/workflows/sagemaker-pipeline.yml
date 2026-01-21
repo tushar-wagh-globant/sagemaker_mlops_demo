@@ -13,17 +13,16 @@ env:
   AWS_REGION: us-east-1
   PYTHON_VERSION: "3.9"
 
-# 🔐 REQUIRED FOR OIDC
 permissions:
   id-token: write
   contents: read
 
 jobs:
   # --------------------------------------------------
-  # CI: Run Tests & Lint
+  # CI: Linting & Tests
   # --------------------------------------------------
   test:
-    name: Run Tests
+    name: Run Tests & Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -40,7 +39,7 @@ jobs:
         with:
           enable-cache: false
 
-      # 🔹 Install all dependencies (runtime + dev)
+      # 🔹 Install runtime + dev dependencies
       - name: Sync dependencies (runtime + dev)
         run: uv sync --dev
 
@@ -51,7 +50,7 @@ jobs:
         run: uv run pytest tests/ -v
 
   # --------------------------------------------------
-  # CD: Build & Deploy SageMaker Pipeline
+  # CD: Deploy SageMaker Pipeline
   # --------------------------------------------------
   deploy:
     name: Build & Deploy
@@ -73,11 +72,11 @@ jobs:
         with:
           enable-cache: false
 
-      # 🔹 Install runtime dependencies only for deployment
+      # 🔹 Install runtime dependencies only
       - name: Sync runtime dependencies
         run: uv sync
 
-      # 🔐 OIDC AUTH
+      # 🔐 OIDC Authentication for AWS
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
