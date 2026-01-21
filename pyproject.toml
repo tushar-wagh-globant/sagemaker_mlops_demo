@@ -17,10 +17,8 @@ dependencies = [
     "seaborn>=0.12.0",
 ]
 
-# Proper dev-dependencies format (sequence)
 [tool.uv.dev-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "black>=23.9",
-    "flake8>=6.1.0"
-]
+# Flat list format - no nested 'dev' key
+pytest = ">=7.4.0"
+black = ">=23.9"
+flake8 = ">=6.1.0"
