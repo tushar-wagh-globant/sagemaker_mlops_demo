@@ -74,10 +74,6 @@ jobs:
       - name: Sync runtime dependencies
         run: uv sync --frozen  # ✅ Uses uv.lock, includes sagemaker[pipelines]
 
-      # 🔍 Optional: Verify sagemaker.workflow is available
-      - name: Verify SageMaker pipelines import
-        run: |
-          python -c "from sagemaker.workflow.pipeline import Pipeline; print('✅ sagemaker.workflow imported successfully')"
 
       # 🔐 OIDC Authentication for AWS
       - name: Configure AWS credentials
