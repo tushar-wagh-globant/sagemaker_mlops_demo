@@ -18,8 +18,4 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
-    "pytest>=7.4.0",
-    "black>=23.9",
-    "flake8>=6.1.0",
-]
+dev = ["pytest>=7.4.0", "black>=23.9", "flake8>=6.1.0"]
