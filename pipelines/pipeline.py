@@ -11,7 +11,7 @@ from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.functions import JsonGet
 from sagemaker.workflow.parameters import ParameterInteger, ParameterString, ParameterFloat
-from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
+from sagemaker.processing import ProcessingInput, ProcessingOutput
 from sagemaker.sklearn.estimator import SKLearn
 from sagemaker.sklearn.processing import SKLearnProcessor
 from sagemaker.inputs import TrainingInput
@@ -59,8 +59,9 @@ def get_pipeline(
         default_value=0.70
     )
     
+    # ✅ Updated framework version for SageMaker v3 compatibility
     sklearn_processor = SKLearnProcessor(
-        framework_version="1.2-1",
+        framework_version="1.5-1",  # ← Changed from "1.2-1"
         instance_type=processing_instance_type,
         instance_count=1,
         base_job_name=f"{base_job_prefix}-preprocess",
@@ -96,7 +97,7 @@ def get_pipeline(
     sklearn_estimator = SKLearn(
         entry_point="train.py",
         source_dir="src",
-        framework_version="1.2-1",
+        framework_version="1.5-1",  # ← Changed from "1.2-1"
         instance_type=training_instance_type,
         instance_count=1,
         role=role,
@@ -120,7 +121,7 @@ def get_pipeline(
     )
     
     evaluation_processor = SKLearnProcessor(
-        framework_version="1.2-1",
+        framework_version="1.5-1",  # ← Changed from "1.2-1"
         instance_type=processing_instance_type,
         instance_count=1,
         base_job_name=f"{base_job_prefix}-evaluate",
@@ -169,8 +170,8 @@ def get_pipeline(
         name="RegisterModel",
         estimator=sklearn_estimator,
         model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
-        content_types=["application/json"],
-        response_types=["application/json"],
+        content_types=["text/csv"],
+        response_types=["text/csv"],
         inference_instances=["ml.m5.xlarge", "ml.t2.medium"],
         transform_instances=["ml.m5.xlarge"],
         model_package_group_name=model_package_group_name,
