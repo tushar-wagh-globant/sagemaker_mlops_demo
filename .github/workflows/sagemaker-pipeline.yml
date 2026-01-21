@@ -94,7 +94,7 @@ jobs:
         env:
           SAGEMAKER_ROLE_ARN: ${{secrets.SAGEMAKER_ROLE_ARN }}
           S3_BUCKET: ${{secrets.S3_BUCKET }}
-        run: uv run python pipelines/pipeline.py
+        run: uv run --project . python pipelines/pipeline.py
 
       - name: Deploy approved model to endpoint
         run: |
