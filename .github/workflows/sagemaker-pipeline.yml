@@ -40,7 +40,7 @@ jobs:
           enable-cache: false
 
       # 🔹 Install runtime + dev dependencies
-      - name: Sync dependencies (runtime + dev)
+      - name: Sync dev dependencies
         run: uv sync --dev
 
       - name: Run linting
