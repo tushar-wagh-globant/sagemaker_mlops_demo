@@ -93,11 +93,11 @@ jobs:
         env:
           SAGEMAKER_ROLE_ARN: ${{secrets.SAGEMAKER_ROLE_ARN }}
           S3_BUCKET: ${{secrets.S3_BUCKET }}
-        run: uv run python pipelines/pipeline.py
+        run: uv run pipelines/pipeline.py
 
       - name: Deploy approved model to endpoint
         run: |
-          uv run python scripts/deploy.py \
+          uv run scripts/deploy.py \
             --model-package-group wine-quality-models \
             --endpoint-name wine-quality-production \
             --instance-type ml.t2.medium \
