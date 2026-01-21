@@ -72,7 +72,7 @@ jobs:
           enable-cache: true  # ✅ Enable cache
 
       - name: Sync runtime dependencies
-        run: uv sync --frozen  # ✅ Uses uv.lock, includes sagemaker[pipelines]
+        run: uv sync
 
 
       # 🔐 OIDC Authentication for AWS
