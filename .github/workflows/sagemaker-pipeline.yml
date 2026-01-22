@@ -2,104 +2,75 @@ name: SageMaker MLOps Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
   PYTHON_VERSION: "3.10"
-  UV_PYTHON: "3.10"
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  # --------------------------------------------------
-  # CI: Linting & Tests
-  # --------------------------------------------------
   test:
     name: Run Tests & Lint
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
+      - uses: actions/checkout@v4
+      
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: true  # ✅ Enable cache for speed
-          cache-dependency-glob: ""
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Sync dependencies (with dev)
+      - name: Sync dependencies
         run: uv sync --dev
-        env: 
-          UV_PYTHON: "3.10"
 
       - name: Run linting
-        run: uv run flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        run: .venv/bin/python -m flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Run tests
-        run: uv run pytest tests/ -v
+        run: .venv/bin/python -m pytest tests/ -v
 
-  # --------------------------------------------------
-  # CD: Deploy SageMaker Pipeline
-  # --------------------------------------------------
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name != 'pull_request'
-    environment: development
+    environment: production  # ✅ Correctly triggers production secrets
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: true  # ✅ Enable cache
-          cache-dependency-glob: ""
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Sync runtime dependencies
         run: uv sync --no-dev
 
-
-      # 🔐 OIDC Authentication for AWS
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
       - name: Create / Update SageMaker Pipeline
         env:
-          SAGEMAKER_ROLE_ARN: ${{secrets.SAGEMAKER_ROLE_ARN }}
-          S3_BUCKET: ${{secrets.S3_BUCKET }}
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: .venv/bin/python pipelines/pipeline.py
 
       - name: Deploy approved model to endpoint
         run: |
-          uv run python scripts/deploy.py \
+          .venv/bin/python scripts/deploy.py \
             --model-package-group wine-quality-models \
             --endpoint-name wine-quality-production \
             --instance-type ml.t2.medium \
@@ -107,6 +78,7 @@ jobs:
             --region ${{ env.AWS_REGION }}
 
       - name: Test production endpoint
-        run: uv run python scripts/test_endpoint.py \
-          --endpoint-name wine-quality-production \
-          --region ${{ env.AWS_REGION }}
+        run: |
+          .venv/bin/python scripts/test_endpoint.py \
+            --endpoint-name wine-quality-production \
+            --region ${{ env.AWS_REGION }}
