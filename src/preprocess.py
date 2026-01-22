@@ -8,8 +8,30 @@ import joblib
 
 
 def load_data(input_path):
-    input_path = os.path.join(input_path, "wine-quality.csv")
-    df = pd.read_csv(input_path, sep=';')
+    print(f"📂 looking inside: {input_path}")
+    
+    # Check if it's a directory
+    if os.path.isdir(input_path):
+        files = os.listdir(input_path)
+        print(f"📄 Found files: {files}")  # <--- THIS WILL SHOW THE REAL NAME
+        
+        # If the file is named 'winequality-red.csv', your code fails here:
+        target_file = os.path.join(input_path, "wine-quality.csv")
+        
+        if not os.path.exists(target_file):
+             # Fallback: grab the first CSV found
+            csv_files = [f for f in files if f.endswith('.csv')]
+            if csv_files:
+                target_file = os.path.join(input_path, csv_files[0])
+                print(f"✅ Auto-corrected to: {target_file}")
+            else:
+                raise FileNotFoundError(f"No CSV found. Directory contents: {files}")
+                
+        df = pd.read_csv(target_file, sep=';')
+    else:
+        # Fallback if input_path is already a file
+        df = pd.read_csv(input_path, sep=';')
+        
     return df
 
 
