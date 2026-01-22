@@ -210,7 +210,7 @@ def main():
     print(f"Pipeline execution started: {execution.arn}")
     print(f"\nView pipeline in AWS Console:")
     print(f"https://{region}.console.aws.amazon.com/sagemaker/home?region={region}#/pipelines")
-    execution.wait()
+
 
     return execution
 

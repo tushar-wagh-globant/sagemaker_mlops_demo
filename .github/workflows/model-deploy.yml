@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model_package_arn:
-        description: 'Model Package ARN to deploy'
+        description: 'Model Package ARN to deploy (e.g., arn:aws:sagemaker:us-east-1:123:model-package/group/1)'
         required: true
         type: string
       endpoint_name:
@@ -31,69 +31,67 @@ on:
 
 env:
   AWS_REGION: us-east-1
+  PYTHON_VERSION: "3.10"
+
+# 🔐 Permission required for OIDC
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     name: Deploy Model
     runs-on: ubuntu-latest
+    # This connects the job to the specific GitHub Environment (Secrets/Approvals)
     environment:
       name: ${{ github.event.inputs.environment }}
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
+        uses: actions/checkout@v4
       
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
       
-      - name: Install dependencies
-        run: |
-          uv sync
+      - name: Sync dependencies
+        run: uv sync --no-dev
       
+      # 🔐 Using OIDC to authenticate the GitHub Runner
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::887540997367:role/GitHubActions-SageMaker-OIDC
           aws-region: ${{ env.AWS_REGION }}
       
       - name: Deploy model to endpoint
+        env:
+          # This pulls the Execution Role for the SageMaker Endpoint
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }} 
         run: |
-          export SAGEMAKER_ROLE_ARN="${{ secrets.SAGEMAKER_ROLE_ARN }}"
-          
-          python scripts/deploy.py \
+          # ✅ Use .venv/bin/python to ensure dependencies are found
+          .venv/bin/python scripts/deploy.py \
             --model-package-arn "${{ github.event.inputs.model_package_arn }}" \
             --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
             --instance-type "${{ github.event.inputs.instance_type }}" \
             --instance-count "${{ github.event.inputs.instance_count }}" \
             --region ${{ env.AWS_REGION }}
       
-      - name: Wait for endpoint to be in service
-        run: |
-          aws sagemaker wait endpoint-in-service \
-            --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
-            --region ${{ env.AWS_REGION }}
-      
       - name: Test endpoint
         run: |
-          python scripts/test_endpoint.py \
+          .venv/bin/python scripts/test_endpoint.py \
             --endpoint-name "${{ github.event.inputs.endpoint_name }}" \
             --region ${{ env.AWS_REGION }}
       
       - name: Create deployment summary
+        if: always() # Run even if tests fail
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment**: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Endpoint Name**: ${{ github.event.inputs.endpoint_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Model Package**: ${{ github.event.inputs.model_package_arn }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Instance Type**: ${{ github.event.inputs.instance_type }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Instance Count**: ${{ github.event.inputs.instance_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Model ARN**: \`${{ github.event.inputs.model_package_arn }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance**: ${{ github.event.inputs.instance_type }} (x${{ github.event.inputs.instance_count }})" >> $GITHUB_STEP_SUMMARY
