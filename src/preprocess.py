@@ -7,32 +7,45 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 
+import os
+import glob
+import pandas as pd
+import sys
+
+
 def load_data(input_path):
-    print(f"📂 looking inside: {input_path}")
+    print(f"🕵️‍♀️ Searching for data at: {input_path}")
     
-    # Check if it's a directory
-    if os.path.isdir(input_path):
-        files = os.listdir(input_path)
-        print(f"📄 Found files: {files}")  # <--- THIS WILL SHOW THE REAL NAME
-        
-        # If the file is named 'winequality-red.csv', your code fails here:
-        target_file = os.path.join(input_path, "wine-quality.csv")
-        
-        if not os.path.exists(target_file):
-             # Fallback: grab the first CSV found
-            csv_files = [f for f in files if f.endswith('.csv')]
-            if csv_files:
-                target_file = os.path.join(input_path, csv_files[0])
-                print(f"✅ Auto-corrected to: {target_file}")
-            else:
-                raise FileNotFoundError(f"No CSV found. Directory contents: {files}")
-                
-        df = pd.read_csv(target_file, sep=';')
+    # 1. If the path explicitly exists (file or folder), use it
+    if os.path.exists(input_path):
+        if os.path.isfile(input_path):
+            print(f"✅ Found exact file: {input_path}")
+            return pd.read_csv(input_path, sep=';')
+        elif os.path.isdir(input_path):
+            # It's a folder, search inside
+            search_path = input_path
     else:
-        # Fallback if input_path is already a file
-        df = pd.read_csv(input_path, sep=';')
+        # 2. Path doesn't exist (e.g., .../input/data.csv). 
+        # Assume the user meant the PARENT directory.
+        print(f"⚠️ Path not found. Checking parent directory...")
+        search_path = os.path.dirname(input_path)
+
+    # 3. Find any CSV in the search directory
+    print(f"📂 Scanning directory: {search_path}")
+    csv_files = glob.glob(os.path.join(search_path, "*.csv"))
+    
+    if not csv_files:
+        # Critical failure: List everything so we can debug
+        print(f"❌ No CSV files found in {search_path}. Directory contents:")
+        print(os.listdir(search_path))
+        sys.exit(1)
         
-    return df
+    # 4. Use the first CSV found
+    target_file = csv_files[0]
+    print(f"🎉 Auto-detected file: {target_file}")
+    
+    return pd.read_csv(target_file, sep=';')
+
 
 
 def preprocess_data(df, target_column='quality'):
