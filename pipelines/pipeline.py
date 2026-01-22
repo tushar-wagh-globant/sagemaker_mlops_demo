@@ -1,9 +1,10 @@
-# Aim: CI/CD pipeline
-
 import os
 import json
 import boto3
 import sagemaker
+from sagemaker.estimator import Estimator
+from sagemaker.sklearn.processing import SKLearnProcessor
+from sagemaker.processing import ProcessingInput, ProcessingOutput
 from sagemaker.workflow.pipeline import Pipeline
 from sagemaker.workflow.steps import ProcessingStep, TrainingStep
 from sagemaker.workflow.step_collections import RegisterModel
@@ -11,12 +12,7 @@ from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.functions import JsonGet
 from sagemaker.workflow.parameters import ParameterInteger, ParameterString, ParameterFloat
-from sagemaker.processing import ProcessingInput, ProcessingOutput
-from sagemaker.sklearn.estimator import SKLearn
-from sagemaker.sklearn.processing import SKLearnProcessor
-from sagemaker.inputs import TrainingInput
 from sagemaker.workflow.properties import PropertyFile
-from sagemaker.model_metrics import MetricsSource, ModelMetrics
 
 
 def get_pipeline(
@@ -29,42 +25,17 @@ def get_pipeline(
 ):
     sagemaker_session = sagemaker.Session(boto_session=boto3.Session(region_name=region))
     
-    processing_instance_type = ParameterString(
-        name="ProcessingInstanceType",
-        default_value="ml.m5.xlarge"
-    )
+    # Parameters
+    processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.m5.xlarge")
+    training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.xlarge")
+    input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
+    accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
     
-    training_instance_type = ParameterString(
-        name="TrainingInstanceType",
-        default_value="ml.m5.xlarge"
-    )
-    
-    input_data_uri = ParameterString(
-        name="InputDataUri",
-        default_value=f"s3://{s3_bucket}/data/wine-quality.csv"
-    )
-    
-    n_estimators = ParameterInteger(
-        name="NEstimators",
-        default_value=100
-    )
-    
-    max_depth = ParameterInteger(
-        name="MaxDepth",
-        default_value=10
-    )
-    
-    accuracy_threshold = ParameterFloat(
-        name="AccuracyThreshold",
-        default_value=0.70
-    )
-    
-    # ✅ Updated framework version for SageMaker v3 compatibility
+    # Processing Step
     sklearn_processor = SKLearnProcessor(
-        framework_version="1.5-1",  # ← Changed from "1.2-1"
+        framework_version="1.2-1",
         instance_type=processing_instance_type,
         instance_count=1,
-        base_job_name=f"{base_job_prefix}-preprocess",
         role=role,
         sagemaker_session=sagemaker_session,
     )
@@ -73,136 +44,94 @@ def get_pipeline(
         name="PreprocessData",
         processor=sklearn_processor,
         inputs=[
-            ProcessingInput(
-                source=input_data_uri,
-                destination="/opt/ml/processing/input"
-            )
+            ProcessingInput(source=input_data_uri, destination="/opt/ml/processing/input"),
         ],
         outputs=[
-            ProcessingOutput(
-                output_name="train",
-                source="/opt/ml/processing/output/train",
-                destination=f"s3://{s3_bucket}/{base_job_prefix}/train"
-            ),
-            ProcessingOutput(
-                output_name="test",
-                source="/opt/ml/processing/output/test",
-                destination=f"s3://{s3_bucket}/{base_job_prefix}/test"
-            ),
+            ProcessingOutput(output_name="train", source="/opt/ml/processing/output/train"),
+            ProcessingOutput(output_name="test", source="/opt/ml/processing/output/test"),
         ],
         code="src/preprocess.py",
-        job_arguments=["--input-data", "/opt/ml/processing/input/wine-quality.csv"]
     )
     
-    sklearn_estimator = SKLearn(
-        entry_point="train.py",
-        source_dir="src",
-        framework_version="1.5-1",  # ← Changed from "1.2-1"
+    # Training Step
+    sklearn_estimator = Estimator(
+        image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
         instance_type=training_instance_type,
         instance_count=1,
         role=role,
-        base_job_name=f"{base_job_prefix}-train",
         sagemaker_session=sagemaker_session,
-        hyperparameters={
-            "n-estimators": n_estimators,
-            "max-depth": max_depth,
-        },
     )
     
     step_train = TrainingStep(
         name="TrainModel",
         estimator=sklearn_estimator,
         inputs={
-            "train": TrainingInput(
+            "train": sagemaker.inputs.TrainingInput(
                 s3_data=step_process.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
-                content_type="text/csv"
-            )
-        }
+                content_type="text/csv",
+            ),
+        },
     )
     
-    evaluation_processor = SKLearnProcessor(
-        framework_version="1.5-1",  # ← Changed from "1.2-1"
-        instance_type=processing_instance_type,
+    # Evaluation Step
+    evaluation_report = PropertyFile(
+        name="EvaluationReport",
+        output_name="evaluation",
+        path="evaluation.json",
+    )
+    
+    eval_processor = SKLearnProcessor(
+        framework_version="1.2-1",
+        instance_type="ml.m5.xlarge",
         instance_count=1,
-        base_job_name=f"{base_job_prefix}-evaluate",
         role=role,
         sagemaker_session=sagemaker_session,
     )
     
-    evaluation_report = PropertyFile(
-        name="EvaluationReport",
-        output_name="evaluation",
-        path="evaluation.json"
-    )
-    
     step_evaluate = ProcessingStep(
         name="EvaluateModel",
-        processor=evaluation_processor,
+        processor=eval_processor,
         inputs=[
             ProcessingInput(
                 source=step_train.properties.ModelArtifacts.S3ModelArtifacts,
-                destination="/opt/ml/processing/model"
+                destination="/opt/ml/processing/model",
             ),
             ProcessingInput(
                 source=step_process.properties.ProcessingOutputConfig.Outputs["test"].S3Output.S3Uri,
-                destination="/opt/ml/processing/test"
-            )
+                destination="/opt/ml/processing/test",
+            ),
         ],
         outputs=[
-            ProcessingOutput(
-                output_name="evaluation",
-                source="/opt/ml/processing/evaluation",
-                destination=f"s3://{s3_bucket}/{base_job_prefix}/evaluation"
-            )
+            ProcessingOutput(output_name="evaluation", source="/opt/ml/processing/evaluation"),
         ],
         code="src/evaluate.py",
-        property_files=[evaluation_report]
+        property_files=[evaluation_report],
     )
     
-    model_metrics = ModelMetrics(
-        model_statistics=MetricsSource(
-            s3_uri=f"s3://{s3_bucket}/{base_job_prefix}/evaluation/evaluation.json",
-            content_type="application/json"
-        )
-    )
-    
-    step_register = RegisterModel(
-        name="RegisterModel",
-        estimator=sklearn_estimator,
-        model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
-        content_types=["text/csv"],
-        response_types=["text/csv"],
-        inference_instances=["ml.m5.xlarge", "ml.t2.medium"],
-        transform_instances=["ml.m5.xlarge"],
-        model_package_group_name=model_package_group_name,
-        approval_status="PendingManualApproval",
-        model_metrics=model_metrics,
-    )
-    
+    # Condition Step
     cond_gte = ConditionGreaterThanOrEqualTo(
         left=JsonGet(
             step_name=step_evaluate.name,
             property_file=evaluation_report,
-            json_path="metrics.accuracy"
+            json_path="metrics.accuracy",
         ),
-        right=accuracy_threshold
+        right=accuracy_threshold,
     )
     
     step_cond = ConditionStep(
         name="CheckAccuracyThreshold",
         conditions=[cond_gte],
-        if_steps=[step_register],
-        else_steps=[]
+        if_steps=[],
+        else_steps=[],
     )
     
+    # Pipeline
     pipeline = Pipeline(
         name=pipeline_name,
         parameters=[
             processing_instance_type,
             training_instance_type,
             input_data_uri,
-            n_estimators,
-            max_depth,
             accuracy_threshold,
         ],
         steps=[step_process, step_train, step_evaluate, step_cond],
@@ -245,9 +174,6 @@ def main():
         role=role,
         s3_bucket=s3_bucket,
     )
-    
-    print("\nPipeline definition:")
-    print(json.dumps(json.loads(pipeline.definition()), indent=2))
     
     print("\nUpserting pipeline...")
     pipeline.upsert(role_arn=role)

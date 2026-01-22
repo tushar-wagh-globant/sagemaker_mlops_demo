@@ -3,16 +3,17 @@ name = "sagemaker-mlops-demo"
 version = "0.1.0"
 description = "SageMaker MLOps Demo with scikit-learn"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.13"
 dependencies = [
-    "boto3>=1.28.0",
+    "boto3>=1.34.0",              # Updated for V3 compatibility
     "joblib>=1.3.0",
     "matplotlib>=3.7.0",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
-    "sagemaker[pipelines]>=3.0.0",
+    # SageMaker SDK v2 (stable pipeline API)
+    "sagemaker>=2.200.0,<3.0.0",
     "scikit-learn>=1.3.0",
     "seaborn>=0.12.0",
 ]
