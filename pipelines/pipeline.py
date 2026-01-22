@@ -23,7 +23,11 @@ def get_pipeline(
     model_package_group_name="wine-quality-models",
     base_job_prefix="wine-quality",
 ):
-    sagemaker_session = sagemaker.Session(boto_session=boto3.Session(region_name=region))
+    boto_session = boto3.Session(region_name=region)
+    sagemaker_session = sagemaker.Session(
+        boto_session=boto_session,
+        default_bucket=s3_bucket
+    )
     
     # Parameters
     processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.m5.xlarge")
