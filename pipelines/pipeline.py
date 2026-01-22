@@ -31,8 +31,8 @@ def get_pipeline(
     )
     
     # --- Parameters ---
-    processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.m5.xlarge")
-    training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.xlarge")
+    processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.t3.medium")
+    training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.t3.medium")
     input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
     accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
     
@@ -87,7 +87,7 @@ def get_pipeline(
     
     eval_processor = SKLearnProcessor(
         framework_version="1.2-1",
-        instance_type="ml.m5.xlarge",
+        instance_type="ml.t3.medium",
         instance_count=1,
         role=role,
         sagemaker_session=sagemaker_session,
