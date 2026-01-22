@@ -8,6 +8,7 @@ import joblib
 
 
 def load_data(input_path):
+    input_path = os.path.join(input_path, "wine-quality.csv")
     df = pd.read_csv(input_path, sep=';')
     return df
 
