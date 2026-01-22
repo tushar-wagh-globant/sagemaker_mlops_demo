@@ -1,9 +1,10 @@
 import argparse
 import boto3
 import sagemaker
+import os
+import sys
 from sagemaker.sklearn.model import SKLearnModel
 from datetime import datetime
-
 
 def deploy_model(
     model_package_arn=None,
@@ -30,18 +31,24 @@ def deploy_model(
         
         sm_client = boto3.client('sagemaker', region_name=region)
         
+        # Unique Model Name to avoid collisions
         model_name = f"wine-quality-model-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
-        create_model_response = sm_client.create_model(
+        sm_client.create_model(
             ModelName=model_name,
-            Containers=[{
-                'ModelPackageName': model_package_arn
-            }],
+            Containers=[{'ModelPackageName': model_package_arn}],
             ExecutionRoleArn=role
         )
         
         endpoint_config_name = f"{endpoint_name}-config"
         
+        # Check if config exists, if so delete (re-deployment scenario)
+        try:
+            sm_client.delete_endpoint_config(EndpointConfigName=endpoint_config_name)
+            print(f"Deleted existing endpoint config: {endpoint_config_name}")
+        except:
+            pass
+
         sm_client.create_endpoint_config(
             EndpointConfigName=endpoint_config_name,
             ProductionVariants=[{
@@ -54,19 +61,28 @@ def deploy_model(
                 'EnableCapture': True,
                 'InitialSamplingPercentage': 100,
                 'DestinationS3Uri': f's3://{sagemaker_session.default_bucket()}/data-capture',
-                'CaptureOptions': [
-                    {'CaptureMode': 'Input'},
-                    {'CaptureMode': 'Output'}
-                ]
+                'CaptureOptions': [{'CaptureMode': 'Input'}, {'CaptureMode': 'Output'}]
             }
         )
         
-        sm_client.create_endpoint(
-            EndpointName=endpoint_name,
-            EndpointConfigName=endpoint_config_name
-        )
+        # Check if endpoint exists
+        try:
+            sm_client.describe_endpoint(EndpointName=endpoint_name)
+            print(f"Updating existing endpoint: {endpoint_name}")
+            sm_client.update_endpoint(
+                EndpointName=endpoint_name,
+                EndpointConfigName=endpoint_config_name
+            )
+        except sm_client.exceptions.ClientError:
+            print(f"Creating new endpoint: {endpoint_name}")
+            sm_client.create_endpoint(
+                EndpointName=endpoint_name,
+                EndpointConfigName=endpoint_config_name
+            )
         
-        print(f"Endpoint creation in progress...")
+        print(f"Waiting for endpoint '{endpoint_name}' to be InService...")
+        waiter = sm_client.get_waiter('endpoint_in_service')
+        waiter.wait(EndpointName=endpoint_name)
         
     elif model_data:
         print(f"Using model artifacts: {model_data}")
@@ -80,51 +96,42 @@ def deploy_model(
             sagemaker_session=sagemaker_session,
         )
         
-        predictor = model.deploy(
+        model.deploy(
             initial_instance_count=initial_instance_count,
             instance_type=instance_type,
             endpoint_name=endpoint_name,
-            data_capture_config=sagemaker.model_monitor.DataCaptureConfig(
-                enable_capture=True,
-                sampling_percentage=100,
-                destination_s3_uri=f's3://{sagemaker_session.default_bucket()}/data-capture'
-            )
+            # wait=True is default here, so it's safe
         )
-        
-        print(f"Model deployed successfully!")
         
     else:
         raise ValueError("Either model_package_arn or model_data must be provided")
     
-    print(f"\nEndpoint Name: {endpoint_name}")
-    print(f"Instance Type: {instance_type}")
-    print(f"Instance Count: {initial_instance_count}")
-    print(f"\nTest the endpoint with:")
-    print(f"  python scripts/test_endpoint.py --endpoint-name {endpoint_name}")
-    
+    print(f"\n✅ Deployment Complete!")
+    print(f"Endpoint Name: {endpoint_name}")
     return endpoint_name
-
 
 def get_latest_approved_model_package(model_package_group_name, region="us-east-1"):
     sm_client = boto3.client('sagemaker', region_name=region)
     
-    response = sm_client.list_model_packages(
-        ModelPackageGroupName=model_package_group_name,
-        ModelApprovalStatus='Approved',
-        SortBy='CreationTime',
-        SortOrder='Descending',
-        MaxResults=1
-    )
-    
-    if response['ModelPackageSummaryList']:
-        return response['ModelPackageSummaryList'][0]['ModelPackageArn']
-    else:
+    # Add error handling for missing permissions or groups
+    try:
+        response = sm_client.list_model_packages(
+            ModelPackageGroupName=model_package_group_name,
+            ModelApprovalStatus='Approved',
+            SortBy='CreationTime',
+            SortOrder='Descending',
+            MaxResults=1
+        )
+        if response['ModelPackageSummaryList']:
+            return response['ModelPackageSummaryList'][0]['ModelPackageArn']
+    except Exception as e:
+        print(f"Error listing model packages: {e}")
         return None
-
+    
+    return None
 
 def main():
     parser = argparse.ArgumentParser()
-    
     parser.add_argument('--model-package-group', type=str, default='wine-quality-models')
     parser.add_argument('--model-package-arn', type=str)
     parser.add_argument('--model-data', type=str)
@@ -149,9 +156,9 @@ def main():
             print(f"Found model package: {model_package_arn}")
             args.model_package_arn = model_package_arn
         else:
-            print(f"No approved model found in {args.model_package_group}")
-            return
-    
+            print(f"❌ Error: No approved model found in {args.model_package_group}")
+            sys.exit(1)
+            
     deploy_model(
         model_package_arn=args.model_package_arn,
         model_data=args.model_data,
@@ -162,7 +169,5 @@ def main():
         region=args.region
     )
 
-
 if __name__ == "__main__":
-    import os
     main()

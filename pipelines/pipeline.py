@@ -13,7 +13,8 @@ from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.functions import JsonGet
 from sagemaker.workflow.parameters import ParameterInteger, ParameterString, ParameterFloat
 from sagemaker.workflow.properties import PropertyFile
-
+# ✅ Added for Metrics
+from sagemaker.model_metrics import MetricsSource, ModelMetrics 
 
 def get_pipeline(
     region,
@@ -29,13 +30,13 @@ def get_pipeline(
         default_bucket=s3_bucket
     )
     
-    # Parameters
+    # --- Parameters ---
     processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.m5.xlarge")
     training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.xlarge")
     input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
     accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
     
-    # Processing Step
+    # --- Processing Step ---
     sklearn_processor = SKLearnProcessor(
         framework_version="1.2-1",
         instance_type=processing_instance_type,
@@ -57,7 +58,7 @@ def get_pipeline(
         code="src/preprocess.py",
     )
     
-    # Training Step
+    # --- Training Step ---
     sklearn_estimator = Estimator(
         image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
         instance_type=training_instance_type,
@@ -77,7 +78,7 @@ def get_pipeline(
         },
     )
     
-    # Evaluation Step
+    # --- Evaluation Step ---
     evaluation_report = PropertyFile(
         name="EvaluationReport",
         output_name="evaluation",
@@ -111,8 +112,29 @@ def get_pipeline(
         code="src/evaluate.py",
         property_files=[evaluation_report],
     )
+
+    # --- Register Model Step (THIS WAS MISSING) ---
+    model_metrics = ModelMetrics(
+        model_statistics=MetricsSource(
+            s3_uri=f"s3://{s3_bucket}/{base_job_prefix}/evaluation/evaluation.json",
+            content_type="application/json"
+        )
+    )
+
+    step_register = RegisterModel(
+        name="RegisterWineQualityModel",
+        estimator=sklearn_estimator,
+        model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
+        content_types=["text/csv", "application/json"],
+        response_types=["text/csv", "application/json"],
+        inference_instances=["ml.t2.medium", "ml.m5.large"],
+        transform_instances=["ml.m5.large"],
+        model_package_group_name=model_package_group_name,
+        approval_status="Approved",  # ✅ Auto-Approve for immediate deployment
+        model_metrics=model_metrics,
+    )
     
-    # Condition Step
+    # --- Condition Step ---
     cond_gte = ConditionGreaterThanOrEqualTo(
         left=JsonGet(
             step_name=step_evaluate.name,
@@ -125,11 +147,11 @@ def get_pipeline(
     step_cond = ConditionStep(
         name="CheckAccuracyThreshold",
         conditions=[cond_gte],
-        if_steps=[],
+        if_steps=[step_register],  # ✅ Added step_register here!
         else_steps=[],
     )
     
-    # Pipeline
+    # --- Pipeline ---
     pipeline = Pipeline(
         name=pipeline_name,
         parameters=[

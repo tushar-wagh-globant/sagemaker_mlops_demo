@@ -1,12 +1,14 @@
 import argparse
 import json
 import boto3
-import numpy as np
-
+import sys
 
 def test_endpoint(endpoint_name, region="us-east-1"):
-    runtime = boto3.client('sagemaker-runtime', region_name=region)
+    # explicit session ensures we pick up the right credentials/region
+    session = boto3.Session(region_name=region)
+    runtime = session.client('sagemaker-runtime')
     
+    # Payload format for SageMaker Scikit-Learn containers
     sample_data = {
         "instances": [
             [7.4, 0.7, 0.0, 1.9, 0.076, 11.0, 34.0, 0.9978, 3.51, 0.56, 9.4],
@@ -16,21 +18,34 @@ def test_endpoint(endpoint_name, region="us-east-1"):
     }
     
     print(f"Testing endpoint: {endpoint_name}")
-    print(f"Sample input: {json.dumps(sample_data, indent=2)}")
+    print(f"Region: {region}")
     
-    response = runtime.invoke_endpoint(
-        EndpointName=endpoint_name,
-        ContentType='application/json',
-        Body=json.dumps(sample_data)
-    )
-    
-    result = json.loads(response['Body'].read().decode())
-    
-    print("\n=== Prediction Results ===")
-    print(json.dumps(result, indent=2))
-    
-    return result
+    try:
+        response = runtime.invoke_endpoint(
+            EndpointName=endpoint_name,
+            ContentType='application/json',
+            Body=json.dumps(sample_data)
+        )
+        
+        result = json.loads(response['Body'].read().decode())
+        
+        print("\n=== ✅ Prediction Results ===")
+        print(json.dumps(result, indent=2))
+        return result
 
+    except runtime.exceptions.ValidationError as e:
+        print(f"\n❌ Validation Error: The endpoint rejected the data format.")
+        print(f"Details: {e}")
+        sys.exit(1)
+        
+    except runtime.exceptions.ModelError as e:
+        print(f"\n❌ Model Error: The model failed to process the request.")
+        print(f"Details: {e}")
+        sys.exit(1)
+        
+    except Exception as e:
+        print(f"\n❌ Error invoking endpoint: {e}")
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -40,7 +55,6 @@ def main():
     args = parser.parse_args()
     
     test_endpoint(args.endpoint_name, args.region)
-
 
 if __name__ == "__main__":
     main()
