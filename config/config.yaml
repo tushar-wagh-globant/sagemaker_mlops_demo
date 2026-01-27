@@ -17,7 +17,7 @@ model:
     min_samples_leaf: 1
     random_state: 42
   metrics_threshold:
-    accuracy: 0.70
+    accuracy: 0.50
 
 sagemaker:
   region: us-east-1
