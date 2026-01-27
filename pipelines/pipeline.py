@@ -2,6 +2,7 @@ import os
 import json
 import boto3
 import sagemaker
+import time  # ✅ Added for sleep in group creation
 from sagemaker.estimator import Estimator
 from sagemaker.sklearn.processing import SKLearnProcessor
 from sagemaker.processing import ProcessingInput, ProcessingOutput
@@ -13,8 +14,22 @@ from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.functions import JsonGet
 from sagemaker.workflow.parameters import ParameterInteger, ParameterString, ParameterFloat
 from sagemaker.workflow.properties import PropertyFile
-# ✅ Added for Metrics
 from sagemaker.model_metrics import MetricsSource, ModelMetrics 
+
+# ✅ Helper function to auto-create the Model Registry Group
+def ensure_model_package_group_exists(group_name, region):
+    sm_client = boto3.client("sagemaker", region_name=region)
+    try:
+        sm_client.describe_model_package_group(ModelPackageGroupName=group_name)
+        print(f"✅ Group '{group_name}' already exists.")
+    except sm_client.exceptions.ResourceNotFound:
+        print(f"⚠️ Group '{group_name}' not found. Creating it...")
+        sm_client.create_model_package_group(
+            ModelPackageGroupName=group_name,
+            ModelPackageGroupDescription="Model group for Wine Quality pipeline"
+        )
+        time.sleep(2) # Wait for propagation
+        print(f"✅ Group '{group_name}' created successfully.")
 
 def get_pipeline(
     region,
@@ -31,8 +46,12 @@ def get_pipeline(
     )
     
     # --- Parameters ---
+    # T3 is fine for Processing
     processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.t3.medium")
-    training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.t3.medium")
+    
+    # ✅ CHANGED: Used ml.m5.large because T-series is not supported for Training
+    training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.large")
+    
     input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
     accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
     
@@ -113,7 +132,7 @@ def get_pipeline(
         property_files=[evaluation_report],
     )
 
-    # --- Register Model Step (THIS WAS MISSING) ---
+    # --- Register Model Step ---
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
             s3_uri=f"s3://{s3_bucket}/{base_job_prefix}/evaluation/evaluation.json",
@@ -130,7 +149,7 @@ def get_pipeline(
         inference_instances=["ml.t2.medium", "ml.m5.large"],
         transform_instances=["ml.m5.large"],
         model_package_group_name=model_package_group_name,
-        approval_status="Approved",  # ✅ Auto-Approve for immediate deployment
+        approval_status="Approved", 
         model_metrics=model_metrics,
     )
     
@@ -147,7 +166,7 @@ def get_pipeline(
     step_cond = ConditionStep(
         name="CheckAccuracyThreshold",
         conditions=[cond_gte],
-        if_steps=[step_register],  # ✅ Added step_register here!
+        if_steps=[step_register],
         else_steps=[],
     )
     
@@ -190,7 +209,12 @@ def main():
     if not s3_bucket or '${' in s3_bucket:
         raise ValueError("S3_BUCKET environment variable not set")
     
-    print(f"Creating pipeline...")
+    # ✅ Setup the Model Package Group (Prevents "ValidationException" errors later)
+    model_package_group_name = "wine-quality-models"
+    print(f"\nChecking Model Package Group: {model_package_group_name}...")
+    ensure_model_package_group_exists(model_package_group_name, region)
+
+    print(f"\nCreating pipeline...")
     print(f"Region: {region}")
     print(f"Role: {role}")
     print(f"S3 Bucket: {s3_bucket}")
@@ -199,6 +223,7 @@ def main():
         region=region,
         role=role,
         s3_bucket=s3_bucket,
+        model_package_group_name=model_package_group_name
     )
     
     print("\nUpserting pipeline...")
@@ -208,9 +233,18 @@ def main():
     execution = pipeline.start()
     
     print(f"Pipeline execution started: {execution.arn}")
-    print(f"\nView pipeline in AWS Console:")
-    print(f"https://{region}.console.aws.amazon.com/sagemaker/home?region={region}#/pipelines")
+    print(f"View pipeline in AWS Console: https://{region}.console.aws.amazon.com/sagemaker/home?region={region}#/pipelines/WineQualityPipeline/executions")
 
+    # ✅ Added WAIT logic so GitHub Actions pauses until training finishes
+    print("\n⏳ Waiting for pipeline execution to complete (this may take 10-15 mins)...")
+    try:
+        execution.wait()
+        print("✅ Pipeline execution completed successfully!")
+    except Exception as e:
+        print(f"❌ Pipeline execution failed: {e}")
+        # Exit with error code to fail the CI/CD job
+        import sys
+        sys.exit(1)
 
     return execution
 

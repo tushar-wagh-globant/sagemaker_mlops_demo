@@ -2,9 +2,9 @@ name: SageMaker MLOps Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]  # ✅ Added development
   pull_request:
-    branches: [main]
+    branches: [main, development]  # ✅ Added development
   workflow_dispatch:
 
 env:
@@ -37,12 +37,15 @@ jobs:
       - name: Run tests
         run: .venv/bin/python -m pytest tests/ -v
 
-  pipeline-execution:  # ✏️ Renamed from 'deploy' to be more accurate
+  pipeline-execution:
     name: Upsert & Execute Pipeline
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name != 'pull_request'
-    environment: production
+    # Don't run execution on PRs (save costs), only on Push/Merge
+    if: github.event_name != 'pull_request' 
+    
+    # 🧠 Logic: Select 'production' for main, 'development' for anything else
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -65,19 +68,24 @@ jobs:
       - name: Create / Update SageMaker Pipeline
         id: pipeline-step
         env:
+          # This automatically pulls the secret from the specific environment (Dev or Prod)
           SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          # Optional: You can pass the environment name to Python if you want to suffix resources
+          # e.g., WineQualityPipeline-dev
+          ENV_NAME: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
         run: |
-          # The script will upsert and start the execution
-          # Ensure pipelines/pipeline.py has the .wait() call if you want CI to track progress
+          echo "🚀 Deploying to Environment: $ENV_NAME"
+          
+          # Pass the env name if your python script supports it, otherwise it uses default
           .venv/bin/python pipelines/pipeline.py
 
-      # ✨ NEW: Adds a nice summary to the GitHub Actions UI
       - name: Pipeline Summary
         if: always()
         run: |
           echo "## 🧠 SageMaker Pipeline Execution" >> $GITHUB_STEP_SUMMARY
           echo " The pipeline definition has been updated and a new execution started." >> $GITHUB_STEP_SUMMARY
+          echo " - **Environment**: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}" >> $GITHUB_STEP_SUMMARY
           echo " - **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo " - **Pipeline**: WineQualityPipeline" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
