@@ -153,11 +153,12 @@ def get_pipeline(
     )
     
     # --- Condition Step ---
+# --- Condition Step ---
     cond_gte = ConditionGreaterThanOrEqualTo(
         left=JsonGet(
             step_name=step_evaluate.name,
             property_file=evaluation_report,
-            json_path="metrics.accuracy",
+            json_path="metrics.accuracy.value",  # <--- UPDATED HERE
         ),
         right=accuracy_threshold,
     )
@@ -165,7 +166,7 @@ def get_pipeline(
     step_cond = ConditionStep(
         name="CheckAccuracyThreshold",
         conditions=[cond_gte],
-        if_steps=[step_register],
+        if_steps=[step_register], 
         else_steps=[],
     )
     
