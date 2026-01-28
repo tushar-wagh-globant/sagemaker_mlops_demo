@@ -10,15 +10,15 @@ def deploy_model(
     model_package_arn=None,
     model_data=None,
     endpoint_name=None,
-    instance_type="ml.t2.medium",  # ✅ Updated to a supported instance type
+    instance_type="ml.t2.medium",
     initial_instance_count=1,
     role=None,
     region="us-east-1",
-    s3_bucket=None  # ✅ Added s3_bucket parameter
+    s3_bucket=None
 ):
     boto_session = boto3.Session(region_name=region)
     
-    # ✅ FIX: Explicitly pass the bucket to avoid "Forbidden" on default bucket
+    # Explicitly pass the bucket to avoid "Forbidden" on default bucket
     sagemaker_session = sagemaker.Session(
         boto_session=boto_session,
         default_bucket=s3_bucket
@@ -34,24 +34,33 @@ def deploy_model(
     print(f"🚀 Deploying to Endpoint: {endpoint_name}")
     print(f"🪣 Using Bucket: {sagemaker_session.default_bucket()}")
     
+    sm_client = boto3.client('sagemaker', region_name=region)
+    
     if model_package_arn:
         print(f"Using model package: {model_package_arn}")
         
-        sm_client = boto3.client('sagemaker', region_name=region)
-        
-        # Unique Model Name to avoid collisions
+        # Unique Model Name
         model_name = f"wine-quality-model-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
         print(f"Creating Model: {model_name}")
+        
+        # ✅ FIX: Inject Environment Variables for Inference Script
+        # This tells the container explicitly where to look for the entry point
         sm_client.create_model(
             ModelName=model_name,
-            Containers=[{'ModelPackageName': model_package_arn}],
+            Containers=[{
+                'ModelPackageName': model_package_arn,
+                'Environment': {
+                    'SAGEMAKER_PROGRAM': 'inference.py',
+                    'SAGEMAKER_SUBMIT_DIRECTORY': '/opt/ml/model/code'
+                }
+            }],
             ExecutionRoleArn=role
         )
         
         endpoint_config_name = f"{endpoint_name}-config"
         
-        # Check if config exists, if so delete (re-deployment scenario)
+        # Cleanup existing config if needed
         try:
             sm_client.delete_endpoint_config(EndpointConfigName=endpoint_config_name)
             print(f"Deleted existing endpoint config: {endpoint_config_name}")
@@ -59,23 +68,26 @@ def deploy_model(
             pass
 
         print(f"Creating Endpoint Config: {endpoint_config_name}")
+        
+        data_capture_config = {
+            'EnableCapture': True,
+            'InitialSamplingPercentage': 100,
+            'DestinationS3Uri': f's3://{sagemaker_session.default_bucket()}/data-capture',
+            'CaptureOptions': [{'CaptureMode': 'Input'}, {'CaptureMode': 'Output'}]
+        }
+
         sm_client.create_endpoint_config(
             EndpointConfigName=endpoint_config_name,
             ProductionVariants=[{
                 'VariantName': 'AllTraffic',
                 'ModelName': model_name,
                 'InstanceType': instance_type,
-                'InitialInstanceCount': initial_instance_count,
+                'InitialInstanceCount': int(initial_instance_count),
             }],
-            DataCaptureConfig={
-                'EnableCapture': True,
-                'InitialSamplingPercentage': 100,
-                'DestinationS3Uri': f's3://{sagemaker_session.default_bucket()}/data-capture',
-                'CaptureOptions': [{'CaptureMode': 'Input'}, {'CaptureMode': 'Output'}]
-            }
+            DataCaptureConfig=data_capture_config
         )
         
-        # Check if endpoint exists
+        # Create/Update Endpoint
         try:
             sm_client.describe_endpoint(EndpointName=endpoint_name)
             print(f"Updating existing endpoint: {endpoint_name}")
@@ -95,8 +107,8 @@ def deploy_model(
         waiter.wait(EndpointName=endpoint_name)
         
     elif model_data:
+        # Fallback for manual deployment
         print(f"Using model artifacts: {model_data}")
-        
         model = SKLearnModel(
             model_data=model_data,
             role=role,
@@ -105,7 +117,6 @@ def deploy_model(
             framework_version="1.2-1",
             sagemaker_session=sagemaker_session,
         )
-        
         model.deploy(
             initial_instance_count=initial_instance_count,
             instance_type=instance_type,
@@ -121,7 +132,6 @@ def deploy_model(
 
 def get_latest_approved_model_package(model_package_group_name, region="us-east-1"):
     sm_client = boto3.client('sagemaker', region_name=region)
-    
     try:
         response = sm_client.list_model_packages(
             ModelPackageGroupName=model_package_group_name,
@@ -135,7 +145,6 @@ def get_latest_approved_model_package(model_package_group_name, region="us-east-
     except Exception as e:
         print(f"Error listing model packages: {e}")
         return None
-    
     return None
 
 def main():
@@ -144,7 +153,6 @@ def main():
     parser.add_argument('--model-package-arn', type=str)
     parser.add_argument('--model-data', type=str)
     parser.add_argument('--endpoint-name', type=str)
-    # ✅ Default changed to t2.medium to match supported instances
     parser.add_argument('--instance-type', type=str, default='ml.t2.medium')
     parser.add_argument('--instance-count', type=int, default=1)
     parser.add_argument('--role', type=str)
@@ -153,13 +161,13 @@ def main():
     args = parser.parse_args()
     
     role = args.role or os.environ.get('SAGEMAKER_ROLE_ARN')
-    # ✅ Read bucket from Env Var
     s3_bucket = os.environ.get('S3_BUCKET')
     
     if not s3_bucket:
         print("❌ Error: S3_BUCKET environment variable is missing.")
         sys.exit(1)
     
+    # Auto-resolve latest model if ARN missing
     if not args.model_package_arn and not args.model_data:
         print(f"No model specified, looking for latest approved model in {args.model_package_group}...")
         model_package_arn = get_latest_approved_model_package(
@@ -173,7 +181,7 @@ def main():
         else:
             print(f"❌ Error: No approved model found in {args.model_package_group}")
             sys.exit(1)
-            
+
     deploy_model(
         model_package_arn=args.model_package_arn,
         model_data=args.model_data,
@@ -182,7 +190,7 @@ def main():
         initial_instance_count=args.instance_count,
         role=role,
         region=args.region,
-        s3_bucket=s3_bucket # ✅ Passing the bucket down
+        s3_bucket=s3_bucket
     )
 
 if __name__ == "__main__":
