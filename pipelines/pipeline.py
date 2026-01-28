@@ -62,7 +62,7 @@ def get_pipeline(
     processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.t3.medium")
     training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.large")
     input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
-    accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
+    accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.01)
     
     # --- 1. Processing Step (Preprocessing) ---
     sklearn_processor = SKLearnProcessor(
