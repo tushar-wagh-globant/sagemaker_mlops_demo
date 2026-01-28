@@ -3,18 +3,15 @@ import boto3
 import sagemaker
 import os
 import sys
+import time
 from sagemaker.sklearn.model import SKLearnModel
 from datetime import datetime
 
 def ensure_full_arn(arn):
-    """
-    Helper to fix truncated ARNs (common copy-paste error).
-    """
-    if not arn:
-        return arn
-    if arn.startswith("arn:"):
-        return arn
-    if arn.startswith("us-") or arn.startswith("eu-") or arn.startswith("ap-"):
+    """Helper to fix truncated ARNs."""
+    if not arn: return arn
+    if arn.startswith("arn:"): return arn
+    if arn.startswith("us-") or arn.startswith("eu-"):
         print(f"⚠️ Detected truncated ARN. Auto-correcting...")
         return f"arn:aws:sagemaker:{arn}"
     return arn
@@ -29,29 +26,18 @@ def deploy_model(
     region="us-east-1",
     s3_bucket=None
 ):
-    # Fix ARN if needed
     model_package_arn = ensure_full_arn(model_package_arn)
-
     boto_session = boto3.Session(region_name=region)
-    sagemaker_session = sagemaker.Session(
-        boto_session=boto_session,
-        default_bucket=s3_bucket
-    )
+    sagemaker_session = sagemaker.Session(boto_session=boto_session, default_bucket=s3_bucket)
     
-    if not role:
-        role = sagemaker.get_execution_role()
+    if not role: role = sagemaker.get_execution_role()
+    if not endpoint_name: endpoint_name = "wine-quality-endpoint"
     
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    
-    if not endpoint_name:
-        endpoint_name = "wine-quality-endpoint"
-    
-    # Unique names
     endpoint_config_name = f"{endpoint_name}-config-{timestamp}"
     model_name = f"wine-quality-model-{timestamp}"
 
     print(f"🚀 Deployment Target: {endpoint_name}")
-    print(f"📄 New Config Name:  {endpoint_config_name}")
     print(f"🪣 Bucket:           {sagemaker_session.default_bucket()}")
     
     sm_client = boto3.client('sagemaker', region_name=region)
@@ -59,28 +45,14 @@ def deploy_model(
     if model_package_arn:
         # 1. Create Model
         print(f"   Creating Model Entity: {model_name}")
-        
-        # ✅ FIX: Removed 'Environment' block.
-        # Since we updated train.py to pack 'inference.py' inside the artifact,
-        # SageMaker will now automatically find and load it without us forcing paths.
         sm_client.create_model(
             ModelName=model_name,
-            Containers=[{
-                'ModelPackageName': model_package_arn
-            }],
+            Containers=[{'ModelPackageName': model_package_arn}],
             ExecutionRoleArn=role
         )
         
         # 2. Create Config
         print(f"   Creating Endpoint Config: {endpoint_config_name}")
-        
-        data_capture_config = {
-            'EnableCapture': True,
-            'InitialSamplingPercentage': 100,
-            'DestinationS3Uri': f's3://{sagemaker_session.default_bucket()}/data-capture',
-            'CaptureOptions': [{'CaptureMode': 'Input'}, {'CaptureMode': 'Output'}]
-        }
-
         sm_client.create_endpoint_config(
             EndpointConfigName=endpoint_config_name,
             ProductionVariants=[{
@@ -89,15 +61,35 @@ def deploy_model(
                 'InstanceType': instance_type,
                 'InitialInstanceCount': int(initial_instance_count),
             }],
-            DataCaptureConfig=data_capture_config
+            DataCaptureConfig={
+                'EnableCapture': True,
+                'InitialSamplingPercentage': 100,
+                'DestinationS3Uri': f's3://{sagemaker_session.default_bucket()}/data-capture',
+                'CaptureOptions': [{'CaptureMode': 'Input'}, {'CaptureMode': 'Output'}]
+            }
         )
         
-        # 3. Check Existence (Separated from Update logic)
+        # 3. Check Existence & Health
         endpoint_exists = False
         try:
             existing_endpoint = sm_client.describe_endpoint(EndpointName=endpoint_name)
-            print(f"✅ Found existing endpoint '{endpoint_name}' (Status: {existing_endpoint['EndpointStatus']})")
-            endpoint_exists = True
+            status = existing_endpoint['EndpointStatus']
+            print(f"✅ Found existing endpoint '{endpoint_name}' (Status: {status})")
+            
+            # 🛑 CRITICAL FIX: Handle 'Failed' state
+            if status == 'Failed':
+                print(f"⚠️ Endpoint is broken (Status: Failed). Deleting it to allow fresh creation...")
+                sm_client.delete_endpoint(EndpointName=endpoint_name)
+                print("⏳ Waiting for deletion to complete...")
+                
+                # Wait for it to disappear
+                waiter = sm_client.get_waiter('endpoint_deleted')
+                waiter.wait(EndpointName=endpoint_name)
+                print("🗑️ Broken endpoint deleted.")
+                endpoint_exists = False # Now we treat it as a new deployment
+            else:
+                endpoint_exists = True
+                
         except sm_client.exceptions.ClientError:
             print(f"🆕 Endpoint '{endpoint_name}' does not exist.")
             endpoint_exists = False
@@ -110,9 +102,8 @@ def deploy_model(
                     EndpointName=endpoint_name,
                     EndpointConfigName=endpoint_config_name
                 )
-            except sm_client.exceptions.ClientError as e:
-                print(f"❌ Failed to update endpoint: {e}")
-                print("💡 Hint: If the endpoint is 'Updating' or 'Failed', you may need to wait or delete it manually.")
+            except Exception as e:
+                print(f"❌ Failed to update: {e}")
                 sys.exit(1)
         else:
             print(f"🆕 Creating new endpoint...")
@@ -176,7 +167,6 @@ def main():
     parser.add_argument('--region', type=str, default='us-east-1')
     
     args = parser.parse_args()
-    
     role = args.role or os.environ.get('SAGEMAKER_ROLE_ARN')
     s3_bucket = os.environ.get('S3_BUCKET')
     
@@ -185,16 +175,15 @@ def main():
         sys.exit(1)
     
     if not args.model_package_arn and not args.model_data:
-        print(f"No model specified, looking for latest approved model in {args.model_package_group}...")
+        print(f"No model specified, looking for latest approved model...")
         model_package_arn = get_latest_approved_model_package(
             args.model_package_group,
             region=args.region
         )
         if model_package_arn:
-            print(f"Found model package: {model_package_arn}")
             args.model_package_arn = model_package_arn
         else:
-            print(f"❌ Error: No approved model found in {args.model_package_group}")
+            print(f"❌ Error: No approved model found.")
             sys.exit(1)
 
     deploy_model(
