@@ -3,6 +3,10 @@ import json
 import boto3
 import sagemaker
 import time
+import yaml
+from pathlib import Path
+from dotenv import load_dotenv
+
 from sagemaker.sklearn.estimator import SKLearn
 from sagemaker.sklearn.processing import SKLearnProcessor
 from sagemaker.processing import ProcessingInput, ProcessingOutput
@@ -17,18 +21,26 @@ from sagemaker.workflow.properties import PropertyFile
 from sagemaker.model_metrics import MetricsSource, ModelMetrics 
 
 def ensure_model_package_group_exists(group_name, region):
+    """
+    Checks if the Model Package Group exists. If not, creates it.
+    This prevents 'ResourceNotFound' errors during the RegisterModel step.
+    """
     sm_client = boto3.client("sagemaker", region_name=region)
     try:
         sm_client.describe_model_package_group(ModelPackageGroupName=group_name)
         print(f"✅ Group '{group_name}' already exists.")
     except sm_client.exceptions.ResourceNotFound:
         print(f"⚠️ Group '{group_name}' not found. Creating it...")
-        sm_client.create_model_package_group(
-            ModelPackageGroupName=group_name,
-            ModelPackageGroupDescription="Model group for Wine Quality pipeline"
-        )
-        time.sleep(2)
-        print(f"✅ Group '{group_name}' created successfully.")
+        try:
+            sm_client.create_model_package_group(
+                ModelPackageGroupName=group_name,
+                ModelPackageGroupDescription="Model group for Wine Quality pipeline"
+            )
+            time.sleep(2) # Wait for propagation
+            print(f"✅ Group '{group_name}' created successfully.")
+        except Exception as e:
+            print(f"❌ Failed to create group '{group_name}': {e}")
+            # Do not raise here; let the pipeline try to proceed or fail naturally
 
 def get_pipeline(
     region,
@@ -37,6 +49,7 @@ def get_pipeline(
     pipeline_name="WineQualityPipeline",
     model_package_group_name="wine-quality-models",
     base_job_prefix="wine-quality",
+    pipeline_parameters=None
 ):
     boto_session = boto3.Session(region_name=region)
     sagemaker_session = sagemaker.Session(
@@ -45,13 +58,13 @@ def get_pipeline(
     )
     
     # --- Parameters ---
+    # Default parameters (can be overridden at runtime)
     processing_instance_type = ParameterString(name="ProcessingInstanceType", default_value="ml.t3.medium")
-    # ✅ FIX: Use ml.m5.large for training (T3 is not supported)
     training_instance_type = ParameterString(name="TrainingInstanceType", default_value="ml.m5.large")
     input_data_uri = ParameterString(name="InputDataUri", default_value=f"s3://{s3_bucket}/data/wine-quality.csv")
     accuracy_threshold = ParameterFloat(name="AccuracyThreshold", default_value=0.70)
     
-    # --- Processing Step ---
+    # --- 1. Processing Step (Preprocessing) ---
     sklearn_processor = SKLearnProcessor(
         framework_version="1.2-1",
         instance_type=processing_instance_type,
@@ -73,8 +86,7 @@ def get_pipeline(
         code="src/preprocess.py",
     )
     
-    # --- Training Step ---
-    # ✅ FIX: Use SKLearn Estimator instead of generic Estimator
+    # --- 2. Training Step ---
     sklearn_estimator = SKLearn(
         entry_point="train.py",
         source_dir="src",
@@ -96,7 +108,7 @@ def get_pipeline(
         },
     )
     
-    # --- Evaluation Step ---
+    # --- 3. Evaluation Step ---
     evaluation_report = PropertyFile(
         name="EvaluationReport",
         output_name="evaluation",
@@ -105,7 +117,7 @@ def get_pipeline(
     
     eval_processor = SKLearnProcessor(
         framework_version="1.2-1",
-        instance_type="ml.t3.medium",
+        instance_type=processing_instance_type, # Safe to use T3 here
         instance_count=1,
         role=role,
         sagemaker_session=sagemaker_session,
@@ -131,7 +143,7 @@ def get_pipeline(
         property_files=[evaluation_report],
     )
 
-    # --- Register Model Step ---
+    # --- 4. Register Model Step ---
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
             s3_uri=f"s3://{s3_bucket}/{base_job_prefix}/evaluation/evaluation.json",
@@ -145,20 +157,19 @@ def get_pipeline(
         model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
         content_types=["text/csv", "application/json"],
         response_types=["text/csv", "application/json"],
-        inference_instances=["ml.t2.medium", "ml.m5.large"],
+        inference_instances=["ml.t3.medium", "ml.m5.large"],
         transform_instances=["ml.m5.large"],
         model_package_group_name=model_package_group_name,
         approval_status="Approved",
         model_metrics=model_metrics,
     )
     
-    # --- Condition Step ---
-# --- Condition Step ---
+    # --- 5. Condition Step ---
     cond_gte = ConditionGreaterThanOrEqualTo(
         left=JsonGet(
             step_name=step_evaluate.name,
             property_file=evaluation_report,
-            json_path="metrics.accuracy.value",  # <--- UPDATED HERE
+            json_path="metrics.accuracy.value", # ✅ Reads nested value: {'metrics': {'accuracy': {'value': 0.8}}}
         ),
         right=accuracy_threshold,
     )
@@ -170,7 +181,7 @@ def get_pipeline(
         else_steps=[],
     )
     
-    # --- Pipeline ---
+    # --- Pipeline Definition ---
     pipeline = Pipeline(
         name=pipeline_name,
         parameters=[
@@ -187,43 +198,65 @@ def get_pipeline(
 
 
 def main():
-    import yaml
-    from pathlib import Path
-    
+    # Load env vars
     env_file = Path(__file__).parent.parent / '.env'
     if env_file.exists():
-        from dotenv import load_dotenv
         load_dotenv(env_file)
     
-    with open('config/config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
+    # Load config (optional usage, mostly for fallbacks)
+    config_path = Path('config/config.yaml')
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+    else:
+        config = {}
+
+    # Prioritize Env Vars > Config > Fail
+    role = os.environ.get('SAGEMAKER_ROLE_ARN') 
+    if not role and 'sagemaker' in config:
+        role = config['sagemaker'].get('role_arn')
+        
+    s3_bucket = os.environ.get('S3_BUCKET')
+    if not s3_bucket and 'sagemaker' in config:
+        s3_bucket = config['sagemaker'].get('s3_bucket')
+        
+    region = os.environ.get('AWS_REGION', 'us-east-1')
+
+    if not role:
+        raise ValueError("❌ SAGEMAKER_ROLE_ARN is missing. Check .env or config.yaml")
+    if not s3_bucket:
+        raise ValueError("❌ S3_BUCKET is missing. Check .env or config.yaml")
+
+    # Ensure the Model Group exists
+    model_group = "wine-quality-models"
+    ensure_model_package_group_exists(model_group, region)
     
-    role = os.environ.get('SAGEMAKER_ROLE_ARN') or config['sagemaker']['role_arn']
-    s3_bucket = os.environ.get('S3_BUCKET') or config['sagemaker']['s3_bucket']
-    region = os.environ.get('AWS_REGION') or config['sagemaker']['region']
-    
-    # ✅ FIX: Ensure Group Exists before defining pipeline
-    model_package_group_name = "wine-quality-models"
-    ensure_model_package_group_exists(model_package_group_name, region)
+    print(f"\n🚀 Creating/Updating Pipeline: WineQualityPipeline")
+    print(f"   Region: {region}")
+    print(f"   Role: {role}")
+    print(f"   Bucket: {s3_bucket}")
     
     pipeline = get_pipeline(
         region=region,
         role=role,
         s3_bucket=s3_bucket,
-        model_package_group_name=model_package_group_name
+        model_package_group_name=model_group
     )
     
-    print("Upserting pipeline...")
     pipeline.upsert(role_arn=role)
-    print("Starting execution...")
-    execution = pipeline.start()
-    print(f"Pipeline execution started: {execution.arn}")
+    print("✅ Pipeline definition updated.")
     
-    # ✅ FIX: Wait for execution so GitHub Action doesn't exit early
+    print("▶️ Starting pipeline execution...")
+    execution = pipeline.start()
+    print(f"   Execution ARN: {execution.arn}")
+    print(f"   Console URL: https://{region}.console.aws.amazon.com/sagemaker/home?region={region}#/pipelines/WineQualityPipeline/executions")
+
+    print("\n⏳ Waiting for execution to complete...")
     try:
         execution.wait()
+        print("✅ Pipeline execution completed successfully!")
     except Exception as e:
-        print(f"Pipeline failed: {e}")
+        print(f"❌ Pipeline execution failed: {e}")
         import sys
         sys.exit(1)
 
