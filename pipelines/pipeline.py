@@ -152,17 +152,21 @@ def get_pipeline(
     )
 
     step_register = RegisterModel(
-        name="RegisterWineQualityModel",
-        estimator=sklearn_estimator,
-        model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
-        content_types=["text/csv", "application/json"],
-        response_types=["text/csv", "application/json"],
-        inference_instances=["ml.t3.medium", "ml.m5.large"],
-        transform_instances=["ml.m5.large"],
-        model_package_group_name=model_package_group_name,
-        approval_status="Approved",
-        model_metrics=model_metrics,
-    )
+            name="RegisterWineQualityModel",
+            estimator=sklearn_estimator,
+            model_data=step_train.properties.ModelArtifacts.S3ModelArtifacts,
+            content_types=["text/csv", "application/json"],
+            response_types=["text/csv", "application/json"],
+            
+            # ❌ OLD: ["ml.t3.medium", "ml.m5.large"]  <-- t3.medium caused the crash
+            # ✅ NEW: Use supported instances from the error list
+            inference_instances=["ml.t2.medium", "ml.m5.large"],
+            
+            transform_instances=["ml.m5.large"],
+            model_package_group_name=model_package_group_name,
+            approval_status="Approved",
+            model_metrics=model_metrics,
+        )
     
     # --- 5. Condition Step ---
     cond_gte = ConditionGreaterThanOrEqualTo(

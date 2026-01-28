@@ -26,7 +26,7 @@ sagemaker:
   
   processing:
     # ✅ T3 is supported here. Great for preprocessing!
-    instance_type: ml.t3.medium
+    instance_type: ml.t2.medium
     instance_count: 1
   
   training:
@@ -38,8 +38,7 @@ sagemaker:
     framework_version: "1.2-1"
   
   inference:
-    # ✅ T3 is supported here. Great for saving costs on the endpoint!
-    instance_type: ml.t3.medium
+    instance_type: ml.t2.medium
     initial_instance_count: 1
     
   model_package_group: wine-quality-models
