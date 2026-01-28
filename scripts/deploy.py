@@ -10,12 +10,19 @@ def deploy_model(
     model_package_arn=None,
     model_data=None,
     endpoint_name=None,
-    instance_type="ml.m5.xlarge",
+    instance_type="ml.t2.medium",  # ✅ Updated to a supported instance type
     initial_instance_count=1,
     role=None,
-    region="us-east-1"
+    region="us-east-1",
+    s3_bucket=None  # ✅ Added s3_bucket parameter
 ):
-    sagemaker_session = sagemaker.Session(boto_session=boto3.Session(region_name=region))
+    boto_session = boto3.Session(region_name=region)
+    
+    # ✅ FIX: Explicitly pass the bucket to avoid "Forbidden" on default bucket
+    sagemaker_session = sagemaker.Session(
+        boto_session=boto_session,
+        default_bucket=s3_bucket
+    )
     
     if not role:
         role = sagemaker.get_execution_role()
@@ -24,7 +31,8 @@ def deploy_model(
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         endpoint_name = f"wine-quality-endpoint-{timestamp}"
     
-    print(f"Deploying model to endpoint: {endpoint_name}")
+    print(f"🚀 Deploying to Endpoint: {endpoint_name}")
+    print(f"🪣 Using Bucket: {sagemaker_session.default_bucket()}")
     
     if model_package_arn:
         print(f"Using model package: {model_package_arn}")
@@ -34,6 +42,7 @@ def deploy_model(
         # Unique Model Name to avoid collisions
         model_name = f"wine-quality-model-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
+        print(f"Creating Model: {model_name}")
         sm_client.create_model(
             ModelName=model_name,
             Containers=[{'ModelPackageName': model_package_arn}],
@@ -49,6 +58,7 @@ def deploy_model(
         except:
             pass
 
+        print(f"Creating Endpoint Config: {endpoint_config_name}")
         sm_client.create_endpoint_config(
             EndpointConfigName=endpoint_config_name,
             ProductionVariants=[{
@@ -80,7 +90,7 @@ def deploy_model(
                 EndpointConfigName=endpoint_config_name
             )
         
-        print(f"Waiting for endpoint '{endpoint_name}' to be InService...")
+        print(f"⏳ Waiting for endpoint '{endpoint_name}' to be InService...")
         waiter = sm_client.get_waiter('endpoint_in_service')
         waiter.wait(EndpointName=endpoint_name)
         
@@ -100,7 +110,6 @@ def deploy_model(
             initial_instance_count=initial_instance_count,
             instance_type=instance_type,
             endpoint_name=endpoint_name,
-            # wait=True is default here, so it's safe
         )
         
     else:
@@ -113,7 +122,6 @@ def deploy_model(
 def get_latest_approved_model_package(model_package_group_name, region="us-east-1"):
     sm_client = boto3.client('sagemaker', region_name=region)
     
-    # Add error handling for missing permissions or groups
     try:
         response = sm_client.list_model_packages(
             ModelPackageGroupName=model_package_group_name,
@@ -136,7 +144,8 @@ def main():
     parser.add_argument('--model-package-arn', type=str)
     parser.add_argument('--model-data', type=str)
     parser.add_argument('--endpoint-name', type=str)
-    parser.add_argument('--instance-type', type=str, default='ml.m5.xlarge')
+    # ✅ Default changed to t2.medium to match supported instances
+    parser.add_argument('--instance-type', type=str, default='ml.t2.medium')
     parser.add_argument('--instance-count', type=int, default=1)
     parser.add_argument('--role', type=str)
     parser.add_argument('--region', type=str, default='us-east-1')
@@ -144,6 +153,12 @@ def main():
     args = parser.parse_args()
     
     role = args.role or os.environ.get('SAGEMAKER_ROLE_ARN')
+    # ✅ Read bucket from Env Var
+    s3_bucket = os.environ.get('S3_BUCKET')
+    
+    if not s3_bucket:
+        print("❌ Error: S3_BUCKET environment variable is missing.")
+        sys.exit(1)
     
     if not args.model_package_arn and not args.model_data:
         print(f"No model specified, looking for latest approved model in {args.model_package_group}...")
@@ -166,7 +181,8 @@ def main():
         instance_type=args.instance_type,
         initial_instance_count=args.instance_count,
         role=role,
-        region=args.region
+        region=args.region,
+        s3_bucket=s3_bucket # ✅ Passing the bucket down
     )
 
 if __name__ == "__main__":
