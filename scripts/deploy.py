@@ -6,6 +6,19 @@ import sys
 from sagemaker.sklearn.model import SKLearnModel
 from datetime import datetime
 
+def ensure_full_arn(arn):
+    """
+    Helper to fix truncated ARNs (common copy-paste error).
+    """
+    if not arn:
+        return arn
+    if arn.startswith("arn:"):
+        return arn
+    if arn.startswith("us-") or arn.startswith("eu-") or arn.startswith("ap-"):
+        print(f"⚠️ Detected truncated ARN. Auto-correcting...")
+        return f"arn:aws:sagemaker:{arn}"
+    return arn
+
 def deploy_model(
     model_package_arn=None,
     model_data=None,
@@ -16,9 +29,10 @@ def deploy_model(
     region="us-east-1",
     s3_bucket=None
 ):
+    # Fix ARN if needed
+    model_package_arn = ensure_full_arn(model_package_arn)
+
     boto_session = boto3.Session(region_name=region)
-    
-    # Session setup with explicit bucket
     sagemaker_session = sagemaker.Session(
         boto_session=boto_session,
         default_bucket=s3_bucket
@@ -27,28 +41,23 @@ def deploy_model(
     if not role:
         role = sagemaker.get_execution_role()
     
-    # 1. Setup Naming
-    # We use timestamps to ensure the Model and Config are unique.
-    # This is REQUIRED to update an existing endpoint (Blue/Green deployment).
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     
     if not endpoint_name:
         endpoint_name = "wine-quality-endpoint"
     
-    # Config name MUST be unique for every update
+    # Unique names
     endpoint_config_name = f"{endpoint_name}-config-{timestamp}"
     model_name = f"wine-quality-model-{timestamp}"
 
     print(f"🚀 Deployment Target: {endpoint_name}")
     print(f"📄 New Config Name:  {endpoint_config_name}")
-    print(f"🪣 Bucket: {sagemaker_session.default_bucket()}")
+    print(f"🪣 Bucket:           {sagemaker_session.default_bucket()}")
     
     sm_client = boto3.client('sagemaker', region_name=region)
     
     if model_package_arn:
-        print(f"📦 Using Model Package: {model_package_arn}")
-        
-        # 2. Create Model Entity (Immutable)
+        # 1. Create Model
         print(f"   Creating Model Entity: {model_name}")
         sm_client.create_model(
             ModelName=model_name,
@@ -62,8 +71,7 @@ def deploy_model(
             ExecutionRoleArn=role
         )
         
-        # 3. Create Endpoint Config (Immutable)
-        # We DO NOT delete the old config; we just create a new unique one.
+        # 2. Create Config
         print(f"   Creating Endpoint Config: {endpoint_config_name}")
         
         data_capture_config = {
@@ -84,40 +92,41 @@ def deploy_model(
             DataCaptureConfig=data_capture_config
         )
         
-        # 4. Check & Update OR Create
+        # 3. Check Existence (Separated from Update logic)
+        endpoint_exists = False
         try:
-            # Check if endpoint exists
             existing_endpoint = sm_client.describe_endpoint(EndpointName=endpoint_name)
-            status = existing_endpoint['EndpointStatus']
-            print(f"✅ Found existing endpoint '{endpoint_name}' (Status: {status})")
-            
-            
-
-            if status not in ['InService', 'Failed']:
-                print(f"⚠️ Endpoint is currently {status}. Cannot update immediately.")
-                # Depending on needs, you might raise an error here
-            
-            print(f"🔄 Updating endpoint to use new config: {endpoint_config_name}")
-            sm_client.update_endpoint(
-                EndpointName=endpoint_name,
-                EndpointConfigName=endpoint_config_name
-            )
-            
+            print(f"✅ Found existing endpoint '{endpoint_name}' (Status: {existing_endpoint['EndpointStatus']})")
+            endpoint_exists = True
         except sm_client.exceptions.ClientError:
-            # If describe_endpoint fails, it doesn't exist.
-            print(f"🆕 Endpoint '{endpoint_name}' does not exist. Creating new...")
+            print(f"🆕 Endpoint '{endpoint_name}' does not exist.")
+            endpoint_exists = False
+            
+        # 4. Update or Create
+        if endpoint_exists:
+            print(f"🔄 Updating endpoint to use new config...")
+            try:
+                sm_client.update_endpoint(
+                    EndpointName=endpoint_name,
+                    EndpointConfigName=endpoint_config_name
+                )
+            except sm_client.exceptions.ClientError as e:
+                print(f"❌ Failed to update endpoint: {e}")
+                print("💡 Hint: If the endpoint is 'Updating' or 'Failed', you may need to wait or delete it manually.")
+                sys.exit(1)
+        else:
+            print(f"🆕 Creating new endpoint...")
             sm_client.create_endpoint(
                 EndpointName=endpoint_name,
                 EndpointConfigName=endpoint_config_name
             )
         
-        # 5. Wait for Deployment to Finish
-        print(f"⏳ Waiting for endpoint '{endpoint_name}' to be InService...")
+        print(f"⏳ Waiting for endpoint '{endpoint_name}' to be InService (5-10 mins)...")
         waiter = sm_client.get_waiter('endpoint_in_service')
         waiter.wait(EndpointName=endpoint_name)
         
     elif model_data:
-        # Fallback for direct artifact deployment
+        # Fallback
         print(f"Using model artifacts: {model_data}")
         model = SKLearnModel(
             model_data=model_data,
@@ -132,12 +141,10 @@ def deploy_model(
             instance_type=instance_type,
             endpoint_name=endpoint_name,
         )
-        
     else:
         raise ValueError("Either model_package_arn or model_data must be provided")
     
     print(f"\n✅ Deployment Complete!")
-    print(f"Endpoint Name: {endpoint_name}")
     return endpoint_name
 
 def get_latest_approved_model_package(model_package_group_name, region="us-east-1"):
@@ -183,7 +190,6 @@ def main():
             args.model_package_group,
             region=args.region
         )
-        
         if model_package_arn:
             print(f"Found model package: {model_package_arn}")
             args.model_package_arn = model_package_arn
