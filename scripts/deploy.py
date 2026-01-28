@@ -59,14 +59,14 @@ def deploy_model(
     if model_package_arn:
         # 1. Create Model
         print(f"   Creating Model Entity: {model_name}")
+        
+        # ✅ FIX: Removed 'Environment' block.
+        # Since we updated train.py to pack 'inference.py' inside the artifact,
+        # SageMaker will now automatically find and load it without us forcing paths.
         sm_client.create_model(
             ModelName=model_name,
             Containers=[{
-                'ModelPackageName': model_package_arn,
-                'Environment': {
-                    'SAGEMAKER_PROGRAM': 'inference.py',
-                    'SAGEMAKER_SUBMIT_DIRECTORY': '/opt/ml/model/code'
-                }
+                'ModelPackageName': model_package_arn
             }],
             ExecutionRoleArn=role
         )
