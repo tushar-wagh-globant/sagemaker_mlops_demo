@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model_package_arn:
-        description: 'Model Package ARN (e.g., .../model-package/wine-quality-models/1)'
+        description: 'Model Package ARN (e.g., arn:aws:sagemaker:us-east-1:887540997367:model-package/wine-quality-models/2)'
         required: true
         type: string
       endpoint_name:

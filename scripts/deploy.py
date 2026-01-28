@@ -18,7 +18,7 @@ def deploy_model(
 ):
     boto_session = boto3.Session(region_name=region)
     
-    # Explicitly pass the bucket to avoid "Forbidden" on default bucket
+    # Session setup with explicit bucket
     sagemaker_session = sagemaker.Session(
         boto_session=boto_session,
         default_bucket=s3_bucket
@@ -27,25 +27,29 @@ def deploy_model(
     if not role:
         role = sagemaker.get_execution_role()
     
-    if not endpoint_name:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        endpoint_name = f"wine-quality-endpoint-{timestamp}"
+    # 1. Setup Naming
+    # We use timestamps to ensure the Model and Config are unique.
+    # This is REQUIRED to update an existing endpoint (Blue/Green deployment).
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     
-    print(f"🚀 Deploying to Endpoint: {endpoint_name}")
-    print(f"🪣 Using Bucket: {sagemaker_session.default_bucket()}")
+    if not endpoint_name:
+        endpoint_name = "wine-quality-endpoint"
+    
+    # Config name MUST be unique for every update
+    endpoint_config_name = f"{endpoint_name}-config-{timestamp}"
+    model_name = f"wine-quality-model-{timestamp}"
+
+    print(f"🚀 Deployment Target: {endpoint_name}")
+    print(f"📄 New Config Name:  {endpoint_config_name}")
+    print(f"🪣 Bucket: {sagemaker_session.default_bucket()}")
     
     sm_client = boto3.client('sagemaker', region_name=region)
     
     if model_package_arn:
-        print(f"Using model package: {model_package_arn}")
+        print(f"📦 Using Model Package: {model_package_arn}")
         
-        # Unique Model Name
-        model_name = f"wine-quality-model-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        
-        print(f"Creating Model: {model_name}")
-        
-        # ✅ FIX: Inject Environment Variables for Inference Script
-        # This tells the container explicitly where to look for the entry point
+        # 2. Create Model Entity (Immutable)
+        print(f"   Creating Model Entity: {model_name}")
         sm_client.create_model(
             ModelName=model_name,
             Containers=[{
@@ -58,16 +62,9 @@ def deploy_model(
             ExecutionRoleArn=role
         )
         
-        endpoint_config_name = f"{endpoint_name}-config"
-        
-        # Cleanup existing config if needed
-        try:
-            sm_client.delete_endpoint_config(EndpointConfigName=endpoint_config_name)
-            print(f"Deleted existing endpoint config: {endpoint_config_name}")
-        except:
-            pass
-
-        print(f"Creating Endpoint Config: {endpoint_config_name}")
+        # 3. Create Endpoint Config (Immutable)
+        # We DO NOT delete the old config; we just create a new unique one.
+        print(f"   Creating Endpoint Config: {endpoint_config_name}")
         
         data_capture_config = {
             'EnableCapture': True,
@@ -87,27 +84,40 @@ def deploy_model(
             DataCaptureConfig=data_capture_config
         )
         
-        # Create/Update Endpoint
+        # 4. Check & Update OR Create
         try:
-            sm_client.describe_endpoint(EndpointName=endpoint_name)
-            print(f"Updating existing endpoint: {endpoint_name}")
+            # Check if endpoint exists
+            existing_endpoint = sm_client.describe_endpoint(EndpointName=endpoint_name)
+            status = existing_endpoint['EndpointStatus']
+            print(f"✅ Found existing endpoint '{endpoint_name}' (Status: {status})")
+            
+            
+
+            if status not in ['InService', 'Failed']:
+                print(f"⚠️ Endpoint is currently {status}. Cannot update immediately.")
+                # Depending on needs, you might raise an error here
+            
+            print(f"🔄 Updating endpoint to use new config: {endpoint_config_name}")
             sm_client.update_endpoint(
                 EndpointName=endpoint_name,
                 EndpointConfigName=endpoint_config_name
             )
+            
         except sm_client.exceptions.ClientError:
-            print(f"Creating new endpoint: {endpoint_name}")
+            # If describe_endpoint fails, it doesn't exist.
+            print(f"🆕 Endpoint '{endpoint_name}' does not exist. Creating new...")
             sm_client.create_endpoint(
                 EndpointName=endpoint_name,
                 EndpointConfigName=endpoint_config_name
             )
         
+        # 5. Wait for Deployment to Finish
         print(f"⏳ Waiting for endpoint '{endpoint_name}' to be InService...")
         waiter = sm_client.get_waiter('endpoint_in_service')
         waiter.wait(EndpointName=endpoint_name)
         
     elif model_data:
-        # Fallback for manual deployment
+        # Fallback for direct artifact deployment
         print(f"Using model artifacts: {model_data}")
         model = SKLearnModel(
             model_data=model_data,
@@ -167,7 +177,6 @@ def main():
         print("❌ Error: S3_BUCKET environment variable is missing.")
         sys.exit(1)
     
-    # Auto-resolve latest model if ARN missing
     if not args.model_package_arn and not args.model_data:
         print(f"No model specified, looking for latest approved model in {args.model_package_group}...")
         model_package_arn = get_latest_approved_model_package(
