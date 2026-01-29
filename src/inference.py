@@ -5,8 +5,16 @@ import numpy as np
 
 
 def model_fn(model_dir):
-    model = joblib.load(os.path.join(model_dir, 'model.pkl'))
-    return model
+    import os
+    # Try different model file names
+    for filename in ['model.joblib', 'model.pkl', 'model']:
+        model_path = os.path.join(model_dir, filename)
+        if os.path.exists(model_path):
+            return joblib.load(model_path)
+    
+    # If nothing found, show what's actually there
+    files = os.listdir(model_dir)
+    raise FileNotFoundError(f"No model file found in {model_dir}. Found: {files}")
 
 
 def input_fn(request_body, request_content_type):
