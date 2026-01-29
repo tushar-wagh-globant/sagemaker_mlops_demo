@@ -4,6 +4,8 @@ import sagemaker
 import os
 import sys
 import time
+import tarfile
+import tempfile
 from sagemaker.sklearn.model import SKLearnModel
 from datetime import datetime
 
@@ -43,15 +45,36 @@ def deploy_model(
     sm_client = boto3.client('sagemaker', region_name=region)
     
     if model_package_arn:
-        # 1. Create Model
+        # 1. Package and upload inference code
+        print(f"   Packaging inference code...")
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tar_path = os.path.join(tmpdir, 'sourcedir.tar.gz')
+            with tarfile.open(tar_path, 'w:gz') as tar:
+                tar.add('src/inference.py', arcname='inference.py')
+            
+            s3_client = boto3.client('s3', region_name=region)
+            bucket = sagemaker_session.default_bucket()
+            s3_client.upload_file(tar_path, bucket, 'inference-code/sourcedir.tar.gz')
+        
+        code_s3_uri = f's3://{bucket}/inference-code/sourcedir.tar.gz'
+        print(f"   ✅ Inference code uploaded to {code_s3_uri}")
+        
+        # 2. Create Model
         print(f"   Creating Model Entity: {model_name}")
         sm_client.create_model(
             ModelName=model_name,
-            Containers=[{'ModelPackageName': model_package_arn}],
+            Containers=[{
+                'ModelPackageName': model_package_arn,
+                'Environment': {
+                    'SAGEMAKER_PROGRAM': 'inference.py',
+                    'SAGEMAKER_SUBMIT_DIRECTORY': code_s3_uri
+                }
+            }],
             ExecutionRoleArn=role
         )
         
-        # 2. Create Config
+        # 3. Create Config
         print(f"   Creating Endpoint Config: {endpoint_config_name}")
         sm_client.create_endpoint_config(
             EndpointConfigName=endpoint_config_name,
@@ -69,7 +92,7 @@ def deploy_model(
             }
         )
         
-        # 3. Check Existence & Health
+        # 4. Check Existence & Health
         endpoint_exists = False
         try:
             existing_endpoint = sm_client.describe_endpoint(EndpointName=endpoint_name)
@@ -94,7 +117,7 @@ def deploy_model(
             print(f"🆕 Endpoint '{endpoint_name}' does not exist.")
             endpoint_exists = False
             
-        # 4. Update or Create
+        # 5. Update or Create
         if endpoint_exists:
             print(f"🔄 Updating endpoint to use new config...")
             try:
